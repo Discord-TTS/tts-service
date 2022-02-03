@@ -1,6 +1,7 @@
-use std::net::IpAddr;
+use std::{net::IpAddr, str::FromStr};
 
 use rand::Rng;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn get_random_ipv6() -> IpAddr {
     let ip_block = std::env::var("IPV6_BLOCK")
@@ -12,7 +13,10 @@ fn get_random_ipv6() -> IpAddr {
         .take(16)
         .collect();
 
-    ipgen::ip(&name, ip_block).unwrap()
+    tracing::debug!("Generated random name: {name}");
+    let ip = ipgen::ip(&name, ip_block).unwrap();
+    tracing::debug!("Generated random IP: {ip}");
+    ip
 }
 
 #[derive(serde::Deserialize)]
@@ -26,6 +30,7 @@ async fn get_tts(
 ) -> Result<impl axum::response::IntoResponse, Error> {
     let GetTTS{text, lang} = payload;
 
+    tracing::debug!("Recieved request to TTS: {text} {lang}");
     let mut url = reqwest::Url::parse("https://translate.google.com/translate_tts?ie=UTF-8&total=1&idx=0&client=tw-ob").unwrap();
     url.query_pairs_mut()
         .append_pair("tl", &lang)
@@ -39,19 +44,29 @@ async fn get_tts(
         .get(url)
         .send()
         .await?
-        .error_for_status()?;    
+        .error_for_status()?;
 
+    tracing::debug!("Generated TTS from {text}");
     Ok((response.status(), response.bytes().await?))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let filter = tracing_subscriber::filter::LevelFilter::from_str(
+        &std::env::var("LOG_LEVEL")
+        .unwrap_or_else(|_| String::from("INFO"))
+    )?;
+
+    tracing_subscriber::registry().with(fmt_layer).with(filter).init();
+
     let app = axum::Router::new()
         .route("/tts", axum::routing::get(get_tts));
 
     let bind_to = std::env::var("BIND_ADDR")
         .unwrap_or_else(|_| String::from("0.0.0.0:3000")).parse()?;
 
+    tracing::info!("Binding to {bind_to}");
     axum::Server::bind(&bind_to)
         .serve(app.into_make_service())
         .await?;
@@ -74,13 +89,21 @@ where E: Into<Box<dyn std::error::Error + Send + Sync>> {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            Self::Unknown(err) => write!(f, "{:?}", err)
+        }
     }
 }
 
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
-        dbg!(self);
-        todo!()
+        let (status_code, body) = match self {
+            Self::Unknown(err) => (500, format!("{:?}", err))
+        };
+
+        axum::response::Response::builder()
+            .status(status_code)
+            .body(axum::body::boxed(axum::body::Full::from(body)))
+            .unwrap()
     }
 }
