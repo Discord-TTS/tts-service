@@ -49,10 +49,13 @@ async fn main() -> Result<(), Error> {
     let app = axum::Router::new()
         .route("/tts", axum::routing::get(get_tts));
 
-    // run it with hyper on localhost:3000
-    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+    let bind_to = std::env::var("BIND_ADDR")
+        .unwrap_or_else(|_| String::from("0.0.0.0:3000")).parse()?;
+
+    axum::Server::bind(&bind_to)
         .serve(app.into_make_service())
         .await?;
+
     Ok(())
 }
 
