@@ -41,7 +41,6 @@ async fn get_tts(
     let client = reqwest::Client::builder()
         .local_address(Some(get_random_ipv6()))
         .timeout(std::time::Duration::from_secs(2))
-        .http2_prior_knowledge()
         .build()?;
 
     for _ in 0..5 {
