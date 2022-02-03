@@ -38,16 +38,29 @@ async fn get_tts(
         .append_pair("textlen", &text.len().to_string())
         .finish();
 
-    let response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .local_address(Some(get_random_ipv6()))
-        .build()?
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?;
+        .timeout(std::time::Duration::from_secs(2))
+        .http2_prior_knowledge()
+        .build()?;
 
-    tracing::debug!("Generated TTS from {text}");
-    Ok((response.status(), response.bytes().await?))
+    for _ in 0..5 {
+        match client.get(url.clone()).send().await {
+            Ok(mut resp) => {
+                resp = resp.error_for_status()?;
+
+                tracing::debug!("Generated TTS from {text}");
+                return Ok((resp.status(), resp.bytes().await?))
+            },
+            Err(err) => {
+                if !err.is_timeout() {
+                    return Err(Error::from(err))
+                }
+            }
+        };
+    };
+
+    Ok((reqwest::StatusCode::GATEWAY_TIMEOUT, axum::body::Bytes::new()))
 }
 
 #[tokio::main]
