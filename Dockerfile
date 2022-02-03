@@ -17,7 +17,7 @@ RUN cargo build --release
 # Now make the runtime container
 FROM debian:buster-slim
 
-RUN apt-get update && apt-get upgrade && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/gtts-service /usr/local/bin/gtts-service
 COPY Cargo.lock .
