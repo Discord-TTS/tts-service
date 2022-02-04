@@ -40,8 +40,8 @@ async fn get_tts(
 
     for _ in 0..5 {
         let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(500)) // if google doesn't connect in this time, assume bad IP
             .local_address(Some(get_random_ipv6()))
-            .timeout(std::time::Duration::from_secs(2))
             .build()?;
 
         match client.get(url.clone()).send().await {

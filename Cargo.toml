@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.release]
+lto = "thin"
 
 [dependencies]
 tracing = "0.1"
@@ -15,7 +17,7 @@ ipgen = "1"
 
 [dependencies.tokio]
 version = "1"
-features = ["macros", "rt-multi-thread"]
+features = ["time", "macros", "rt-multi-thread"]
 
 [dependencies.serde]
 version = "1"
