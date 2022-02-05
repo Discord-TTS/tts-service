@@ -54,7 +54,6 @@ struct GetTTS {
     lang: String,
 }
 
-#[axum_macros::debug_handler]
 async fn get_tts(
     axum::extract::Extension(state): axum::extract::Extension<State>,
     axum::extract::Query(payload): axum::extract::Query<GetTTS>
