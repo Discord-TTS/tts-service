@@ -55,7 +55,7 @@ struct GetTTS {
 }
 
 async fn get_tts(
-    axum::extract::Extension(state): axum::extract::Extension<State>,
+    state: State,
     axum::extract::Query(payload): axum::extract::Query<GetTTS>
 ) -> Result<impl axum::response::IntoResponse, Error> {
     let GetTTS{text, lang} = payload;
@@ -108,8 +108,10 @@ async fn main() -> Result<(), Error> {
     let state: State = Arc::new(tokio::sync::RwLock::new(State_ {ip, http}));
 
     let app = axum::Router::new()
-        .layer(axum::AddExtensionLayer::new(state))
-        .route("/tts", axum::routing::get(get_tts));
+        .route("/tts", axum::routing::get({
+            let shared_state = Arc::clone(&state);
+            move |q| get_tts(Arc::clone(&shared_state), q)
+        }));
 
     let bind_to = std::env::var("BIND_ADDR")
         .unwrap_or_else(|_| String::from("0.0.0.0:3000")).parse()?;
