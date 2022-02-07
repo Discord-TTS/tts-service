@@ -155,6 +155,7 @@ impl std::fmt::Display for Error {
 
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
+        tracing::error!("{self:?}");
         axum::response::Response::builder()
             .status(500)
             .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self))))
