@@ -6,8 +6,6 @@ compile_error!("Either feature `gtts`, `espeak`, or `premium` must be enabled!")
 
 use std::{str::FromStr, sync::Arc, borrow::Cow};
 
-use serde_aux::container_attributes::deserialize_struct_case_insensitive as case_insensitive;
-
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature="gtts")] mod gtts;
@@ -17,7 +15,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(serde::Deserialize)]
 struct GetVoices {
-    #[serde(deserialize_with="case_insensitive")] mode: TtsMode,
+    mode: TTSMode,
 }
 
 async fn get_voices(
@@ -26,9 +24,9 @@ async fn get_voices(
     let GetVoices{mode} = payload;
 
     let voices: Vec<String> = match mode {
-        #[cfg(feature="gtts")] TtsMode::gTTS => gtts::get_voices(),
-        #[cfg(feature="espeak")] TtsMode::eSpeak => espeak::get_voices(),
-        #[cfg(feature="premium")] TtsMode::Premium => premium::get_voices(),
+        #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_voices(),
+        #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices(),
+        #[cfg(feature="premium")] TTSMode::Premium => premium::get_voices(),
     };
 
     Ok(axum::Json(voices))
@@ -39,7 +37,7 @@ async fn get_voices(
 struct GetTTS {
     text: String,
     lang: String,
-    #[serde(deserialize_with="case_insensitive")] mode: TtsMode,
+    mode: TTSMode,
     #[cfg(feature="premium")] #[serde(default)] speaking_rate: f32
 }
 
@@ -56,17 +54,17 @@ async fn get_tts(
     let data: bytes::Bytes;
 
     match payload.mode {
-        #[cfg(feature="gtts")] TtsMode::gTTS => {
+        #[cfg(feature="gtts")] TTSMode::gTTS => {
             let resp = gtts::get_tts(&state.gtts, text, lang).await?;
 
             content_type = Cow::Owned(resp.headers()[reqwest::header::CONTENT_TYPE].to_str()?.to_string());
             data = resp.bytes().await?;
         },
-        #[cfg(feature="espeak")] TtsMode::eSpeak => {
+        #[cfg(feature="espeak")] TTSMode::eSpeak => {
             content_type = Cow::Borrowed("audio/wav");
             data = bytes::Bytes::from(espeak::get_tts(text, lang).await?);
         },
-        #[cfg(feature="premium")] TtsMode::Premium => {
+        #[cfg(feature="premium")] TTSMode::Premium => {
             content_type = Cow::Borrowed("audio/opus");
             data = bytes::Bytes::from(premium::get_tts(&state.premium, text, lang, payload.speaking_rate).await?);
         }
@@ -83,7 +81,7 @@ async fn get_tts(
 
 #[derive(serde::Deserialize, Clone, Copy)]
 #[allow(non_camel_case_types)]
-enum TtsMode {
+enum TTSMode {
     #[cfg(feature="gtts")] gTTS,
     #[cfg(feature="espeak")] eSpeak,
     #[cfg(feature="premium")] Premium,
@@ -105,9 +103,14 @@ async fn main() -> Result<(), Error> {
 
     tracing_subscriber::registry().with(fmt_layer).with(filter).init();
 
+    #[cfg(feature="espeak")] {
+        // Init espeakng internally so we can fetch the voice path
+        espeakng::initialise(None)?;
+    }
+
     let state = Arc::new(State {
         #[cfg(feature="gtts")] gtts: gtts::State::new().await?,
-        #[cfg(feature="premium")] premium: premium::State::new()?
+        #[cfg(feature="premium")] premium: premium::State::new()?,
     });
 
     let app = axum::Router::new()
