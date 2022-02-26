@@ -5,10 +5,16 @@ ARG MODES="espeak"
 
 WORKDIR /build
 
+RUN bash -c 'if [[ "$MODES" == *"espeak"* ]]; then \
+    apt-get update && \
+    apt-get install -y libclang-dev libespeak-ng1 && \
+    rm -rf /var/lib/apt/lists/*;  \
+fi'
+
 # This is a dummy build to get the dependencies cached.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && \
-    echo "// dummy file" > src/lib.rs && \
+    echo "fn main() {}" > src/main.rs && \
     cargo build --release --features $MODES && \
     rm -r src
 
@@ -19,16 +25,23 @@ RUN cargo build --release --features $MODES
 # Now make the runtime container
 FROM debian:buster-slim
 
-RUN apt-get update && \
+ARG MODES="espeak"
+
+RUN bash -c '\
+    apt-get update && \
     apt-get upgrade && \
-    apt-get install -y openssl ca-certificates git subversion espeak-ng make gcc && \
-    rm -rf /var/lib/apt/lists/* && \
-    # Install mbrola
-    git clone https://github.com/numediart/MBROLA && cd MBROLA && \
-    make && cp Bin/mbrola /usr/bin/mbrola && \
-    cd .. && rm -rf MBROLA && \
-    # Install mbrola voices
-    svn export https://github.com/numediart/MBROLA-voices/trunk/data /usr/share/mbrola
+    apt-get install -y openssl ca-certificates && \
+    if [[ "$MODES" == *"espeak"* ]]; then \
+        apt-get install -y git subversion espeak-ng make gcc && \
+        git clone https://github.com/numediart/MBROLA && \
+        cd MBROLA && \
+        make && \
+        cp Bin/mbrola /usr/bin/mbrola && \
+        cd .. && \
+        rm -rf MBROLA && \
+        svn export https://github.com/numediart/MBROLA-voices/trunk/data /usr/share/mbrola; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*'
 
 COPY --from=builder /build/target/release/tts-service /usr/local/bin/tts-service
 COPY Cargo.lock .
