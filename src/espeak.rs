@@ -50,7 +50,13 @@ pub(crate) fn get_voices() -> Vec<String> {
             let file = file?;
             if file.file_type()?.is_file() {
                 let file_name = file.file_name().into_string().expect("Invalid filename!");
-                files.push(file_name.split('-').last().unwrap().to_owned());
+                let mut file_name_iter = file_name.split('-').skip(1);
+
+                if let Some(language) = file_name_iter.next() {
+                    if file_name_iter.next().is_none() {
+                        files.push(language.to_owned());
+                    }
+                }
             }
         };
 

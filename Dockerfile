@@ -13,12 +13,11 @@ RUN cargo chef prepare --recipe-path recipe.json
 # Container to build the bot
 FROM chef AS builder
 
-# Install required dependencies
-RUN bash -c 'if [[ "$MODES" == *"espeak"* ]]; then \
-    apt-get update && \
-    apt-get install -y libclang-dev libespeak-ng1 && \
-    rm -rf /var/lib/apt/lists/*;  \
-fi'
+# Build and install espeak-ng
+RUN apt-get update && apt-get install -y libclang-dev && apt-get clean && \ 
+    git clone https://github.com/espeak-ng/espeak-ng --depth 1 && cd espeak-ng && \
+    ./autogen.sh && ./configure --prefix=/usr && make && make install && \ 
+    cd .. && rm -rf espeak-ng
 
 # This is a dummy build to get the dependencies cached.
 COPY --from=planner /build/recipe.json recipe.json
@@ -29,25 +28,19 @@ COPY . .
 RUN cargo build --release --no-default-features --features $MODES
 
 # Now make the runtime container
-FROM debian:buster-slim
+FROM debian:bullseye-slim
 
-ARG MODES="espeak"
-
-RUN bash -c '\
-    apt-get update && \
-    apt-get upgrade && \
-    apt-get install -y openssl ca-certificates && \
-    if [[ "$MODES" == *"espeak"* ]]; then \
-        apt-get install -y git subversion espeak-ng make gcc && \
-        git clone https://github.com/numediart/MBROLA && \
-        cd MBROLA && \
-        make && \
-        cp Bin/mbrola /usr/bin/mbrola && \
-        cd .. && \
-        rm -rf MBROLA && \
-        svn export https://github.com/numediart/MBROLA-voices/trunk/data /usr/share/mbrola; \
-    fi; \
-    rm -rf /var/lib/apt/lists/*'
+RUN apt-get update && apt-get upgrade && \
+    apt-get install -y openssl ca-certificates git subversion make autoconf automake libtool pkg-config g++ && \
+    apt-get clean && \
+    # Build and install espeak-ng
+    git clone https://github.com/espeak-ng/espeak-ng --depth 1 && cd espeak-ng && \
+    ./autogen.sh && ./configure && make && make install && \ 
+    cd .. && rm -rf espeak-ng && mv /usr/local/lib/libespeak* /usr/lib && \
+    # Build and install mbrola
+    git clone https://github.com/numediart/MBROLA && cd MBROLA && make && cp Bin/mbrola /usr/bin/mbrola && cd .. && rm -rf MBROLA && \
+    # Download the mbrola voices to /usr/share/mbrola.
+    svn export https://github.com/numediart/MBROLA-voices/trunk/data /usr/share/mbrola
 
 COPY --from=builder /build/target/release/tts-service /usr/local/bin/tts-service
 COPY Cargo.lock .

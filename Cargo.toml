@@ -9,11 +9,15 @@ rust-version = "1.58"
 lto = "thin"
 
 [dependencies]
-tracing-subscriber = "0.3"
 parking_lot = "0.12"
 serde_json = "1"
 tracing = "0.1"
 bytes = "1"
+
+[dependencies.tracing-subscriber]
+version = "0.3"
+default-features = false
+features = ["smallvec", "fmt", "ansi", "parking_lot"]
 
 [dependencies.axum]
 version = "0.4"
