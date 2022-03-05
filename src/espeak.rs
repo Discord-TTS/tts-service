@@ -5,7 +5,7 @@ use crate::Error;
 
 pub(crate) async fn get_tts(text: &str, voice: &str) -> std::io::Result<Vec<u8>> {
     // We have to loop due to random "unable to get .wav header" errors.
-    loop {
+    let mut raw_wav = loop {
         let espeak_process = tokio::process::Command::new("espeak")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -36,8 +36,19 @@ pub(crate) async fn get_tts(text: &str, voice: &str) -> std::io::Result<Vec<u8>>
             }
         };
 
-        break Ok(output.stdout)
-    }
+        break output.stdout
+    };
+
+    // Fix the wav header to set the ChunkSize and SubChunk2Size
+    // See:
+    // - https://github.com/hadware/voxpopuli/blob/fb94a6130c046bb9f7a27aaaed2a4b434666faa9/voxpopuli/main.py#L150-L158
+    // - http://soundfile.sapp.org/doc/WaveFormat/
+    let wav_len: u32 = raw_wav.len().try_into().expect("WAV data too long!");
+
+    raw_wav[4..8].copy_from_slice(&(wav_len - 8).to_le_bytes());
+    raw_wav[40..44].copy_from_slice(&(wav_len - 44).to_le_bytes());
+
+    Ok(raw_wav)
 }
 
 pub(crate) fn get_voices() -> Vec<String> {
