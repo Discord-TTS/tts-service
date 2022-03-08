@@ -4,8 +4,10 @@
 #[cfg(not(any(feature="gtts", feature="espeak", feature="premium")))] 
 compile_error!("Either feature `gtts`, `espeak`, or `premium` must be enabled!");
 
-use std::{str::FromStr, sync::Arc, borrow::Cow};
+use std::{str::FromStr, sync::Arc, fmt::Display, borrow::Cow};
 
+use sha2::Digest;
+use redis::AsyncCommands;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature="gtts")] mod gtts;
@@ -38,42 +40,76 @@ struct GetTTS {
     text: String,
     lang: String,
     mode: TTSMode,
-    #[cfg(feature="premium")] #[serde(default)] speaking_rate: f32
+    #[serde(default)] speaking_rate: f32
 }
 
 async fn get_tts(
-    #[allow(unused_variables)] state: Arc<State>,
+    state: Arc<State>,
     axum::extract::Query(payload): axum::extract::Query<GetTTS>
 ) -> Result<impl axum::response::IntoResponse, Error> {
-    let text = &payload.text;
-    let lang = &payload.lang;
+    let GetTTS{text, lang, mode, speaking_rate} = payload;
 
-    tracing::debug!("Recieved request to TTS: {text} {lang}");
+    let cache_key = format!("{text} | {lang} | {mode} | {speaking_rate}");
+    tracing::debug!("Recieved request to TTS: {cache_key}");
 
-    let content_type: Cow<str>;
-    let data: bytes::Bytes;
+    let cache_hash = if state.redis.is_some() {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(cache_key.as_bytes());
+        Some(hasher.finalize())
+    } else {
+        None
+    };
 
-    match payload.mode {
-        #[cfg(feature="gtts")] TTSMode::gTTS => {
-            let resp = gtts::get_tts(&state.gtts, text, lang).await?;
+    let mut redis = None;
+    let cached_audio = if let Some(redis_state) = &state.redis {
+        redis = Some((
+            redis_state.client.get().await?,
+            &redis_state.key
+        ));
 
-            content_type = Cow::Owned(resp.headers()[reqwest::header::CONTENT_TYPE].to_str()?.to_string());
-            data = resp.bytes().await?;
-        },
-        #[cfg(feature="espeak")] TTSMode::eSpeak => {
-            content_type = Cow::Borrowed("audio/wav");
-            data = bytes::Bytes::from(espeak::get_tts(text, lang).await?);
-        },
-        #[cfg(feature="premium")] TTSMode::Premium => {
-            content_type = Cow::Borrowed("audio/opus");
-            data = bytes::Bytes::from(premium::get_tts(&state.premium, text, lang, payload.speaking_rate).await?);
+        let (conn, key) = redis.as_mut().unwrap();
+        conn.get::<'_, _, Option<String>>(&*cache_hash.unwrap()).await?
+            .map(|enc| key.decrypt(&enc))
+            .transpose()?
+            .map(bytes::Bytes::from)
+    } else {
+        None
+    };
+
+    let data: bytes::Bytes = match cached_audio {
+        Some(cached_audio) => {
+            tracing::debug!("Used cached TTS for {cache_key}");
+            cached_audio
+        }
+        None => {
+            let data = match mode {
+                #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &lang).await?.bytes().await?,
+                #[cfg(feature="espeak")] TTSMode::eSpeak => bytes::Bytes::from(espeak::get_tts(&text, &lang).await?),
+                #[cfg(feature="premium")] TTSMode::Premium => bytes::Bytes::from(premium::get_tts(
+                    &state.premium, &text, &lang, speaking_rate).await?
+                ),
+            };
+
+            tracing::debug!("Generated TTS from {cache_key}");
+            if let Some((mut redis_conn, key)) = redis {
+                if let Err(err) = redis_conn.set::<'_, _, _, ()>(&*cache_hash.unwrap(), key.encrypt(&data)).await {
+                    tracing::error!("Failed to cache: {err}");
+                } else {
+                    tracing::debug!("Cached TTS from {cache_key}");
+                };
+            };
+
+            data
         }
     };
 
-    tracing::debug!("Generated TTS from {text}");
     Ok(
         axum::response::Response::builder()
-            .header("Content-Type", &*content_type)
+            .header("Content-Type", match mode {
+                #[cfg(feature="gtts")] TTSMode::gTTS => "audio/mpeg",
+                #[cfg(feature="espeak")] TTSMode::eSpeak => "audio/wav",
+                #[cfg(feature="premium")] TTSMode::Premium => "audio/opus"
+            })
             .body(axum::body::Full::new(data))?
     )
 }
@@ -87,7 +123,24 @@ enum TTSMode {
     #[cfg(feature="premium")] Premium,
 }
 
+impl Display for TTSMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            #[cfg(feature="gtts")] Self::gTTS => "gTTS",
+            #[cfg(feature="espeak")] Self::eSpeak => "eSpeak",
+            #[cfg(feature="premium")] Self::Premium => "Premium"
+        })
+    }
+}
+
+
+struct RedisCache {
+    client: deadpool_redis::Pool,
+    key: fernet::Fernet
+}
+
 struct State {
+    redis: Option<RedisCache>,
     #[cfg(feature="gtts")] gtts: tokio::sync::RwLock<gtts::State>,
     #[cfg(feature="premium")] premium: tokio::sync::RwLock<premium::State>
 }
@@ -111,6 +164,13 @@ async fn main() -> Result<(), Error> {
     let state = Arc::new(State {
         #[cfg(feature="gtts")] gtts: gtts::State::new().await?,
         #[cfg(feature="premium")] premium: premium::State::new()?,
+        redis: std::env::var("REDIS_URI").ok().map(|uri| {
+            let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
+            RedisCache {
+                client: deadpool_redis::Config::from_url(uri).create_pool(Some(deadpool_redis::Runtime::Tokio1)).unwrap(),
+                key: fernet::Fernet::new(&key).unwrap()
+            }
+        }),
     });
 
     let app = axum::Router::new()
@@ -127,12 +187,15 @@ async fn main() -> Result<(), Error> {
             ])
         }));
 
-    let bind_to = std::env::var("BIND_ADDR")
-        .unwrap_or_else(|_| String::from("0.0.0.0:3000")).parse()?;
+    let bind_to = std::env::var("BIND_ADDR").ok().map_or_else(
+        || Cow::Borrowed("0.0.0.0:3000"),
+        Cow::Owned
+    ).parse()?;
 
-    tracing::info!("Binding to {bind_to}");
+    tracing::info!("Binding to {bind_to} {} redis enabled!", if state.redis.is_some() {"with"} else {"without"});
     axum::Server::bind(&bind_to)
         .serve(app.into_make_service())
+        .with_graceful_shutdown(async {drop(tokio::signal::ctrl_c().await)})
         .await?;
 
     Ok(())

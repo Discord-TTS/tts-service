@@ -5,6 +5,7 @@ use crate::Error;
 
 pub(crate) async fn get_tts(text: &str, voice: &str) -> std::io::Result<Vec<u8>> {
     // We have to loop due to random "unable to get .wav header" errors.
+    let mut i = 1;
     let mut raw_wav = loop {
         let espeak_process = tokio::process::Command::new("espeak")
             .stdout(std::process::Stdio::piped())
@@ -32,10 +33,12 @@ pub(crate) async fn get_tts(text: &str, voice: &str) -> std::io::Result<Vec<u8>>
             espeak_stderr.read_to_end(&mut stderr).await?;
 
             if String::from_utf8(stderr).unwrap().contains("mbrowrap error: unable to get .wav header from mbrola") {
+                i += 1;
                 continue
             }
         };
 
+        tracing::debug!("Generated eSpeak after {i} tries");
         break output.stdout
     };
 
