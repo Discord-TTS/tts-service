@@ -51,15 +51,12 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client), Error>
             .build()?;
 
         match client.get(parse_url("Hello", "en")).send().await {
+            Err(err) if err.is_timeout() => tracing::warn!("Generated IP {} timed out!", ip),
+            Err(err) => break Err(Error::Reqwest(err)),
             Ok(_) => {
                 tracing::warn!("Generated random IP: {}", ip);
                 break Ok((ip, client))
             },
-            Err(err) if err.is_timeout() => {
-                tracing::warn!("Generated IP {} timed out!", ip);
-                continue
-            },
-            Err(err) => break Err(Error::Reqwest(err))
         }
     }
 }
@@ -67,21 +64,23 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client), Error>
 
 pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str) -> Result<reqwest::Response, Error> {
     loop {
-        let (ip, resp) = {
+        let (ip, result) = {
             let State{ip, http} = state.read().await.clone();
-            (ip, http.get(parse_url(text, lang)).send().await?)
+            (ip, http.get(parse_url(text, lang)).send().await)
         };
-    
-        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            // Generate a new client, with an new IP, and try again
-            tracing::warn!("IP {} has been blocked!", ip);
-    
-            let (new_ip, new_http) = get_random_ipv6().await?;
-            let mut state = state.write().await;
-            state.http = new_http;
-            state.ip = new_ip;
-        } else {
-            break Ok(resp)
+
+        match result {
+            Ok(resp) if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS => break Ok(resp),
+            Err(err) if !err.is_timeout() => break Err(Error::from(err)),
+            _ => {
+                // Generate a new client, with an new IP, and try again
+                tracing::warn!("IP {} has been blocked!", ip);
+
+                let (new_ip, new_http) = get_random_ipv6().await?;
+                let mut state = state.write().await;
+                state.http = new_http;
+                state.ip = new_ip;
+            }
         }
     }
 }
