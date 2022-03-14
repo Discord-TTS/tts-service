@@ -1,6 +1,5 @@
 FROM lukemathwalker/cargo-chef:latest-rust-latest AS chef
 
-ENV RUSTFLAGS="-C target-cpu=native"
 ARG MODES="espeak"
 
 WORKDIR /build
