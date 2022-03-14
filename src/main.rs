@@ -115,7 +115,7 @@ async fn get_tts(
 }
 
 
-#[derive(serde::Deserialize, Clone, Copy)]
+#[derive(serde::Deserialize, Clone, Copy, Debug)]
 #[allow(non_camel_case_types)]
 enum TTSMode {
     #[cfg(feature="gtts")] gTTS,
@@ -204,6 +204,7 @@ async fn main() -> Result<(), Error> {
 
 #[derive(Debug)]
 enum Error {
+    #[cfg(any(feature="gtts", feature="espeak"))] InvalidVoice(TTSMode),
     #[cfg(feature="gtts")] Reqwest(reqwest::Error),
     Unknown(Box<dyn std::error::Error + Send + Sync>)
 }
@@ -228,6 +229,7 @@ where E: Into<Box<dyn std::error::Error + Send + Sync>> {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(any(feature="gtts", feature="espeak"))] Self::InvalidVoice(mode) => write!(f, "Invalid voice for TTS, see /voices?mode={mode}"),
             #[cfg(feature="gtts")] Self::Reqwest(err) => write!(f, "Reqwest Error: {:?}", err),
             Self::Unknown(err) => write!(f, "{:?}", err)
         }
@@ -238,7 +240,10 @@ impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         tracing::error!("{self:?}");
         axum::response::Response::builder()
-            .status(500)
+            .status(match self {
+                #[cfg(any(feature="gtts", feature="espeak"))] Self::InvalidVoice(_) => 400,
+                _ => 500
+            })
             .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self))))
             .unwrap()
     }

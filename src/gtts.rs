@@ -1,7 +1,7 @@
 use tokio::sync::RwLock;
 use rand::Rng;
 
-use crate::Error;
+use crate::{Error, TTSMode};
 
 
 #[derive(Clone)]
@@ -63,6 +63,10 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client), Error>
 
 
 pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str) -> Result<reqwest::Response, Error> {
+    if !get_voices().iter().any(|s| s.as_str() == lang) {
+        return Err(Error::InvalidVoice(TTSMode::gTTS))
+    }
+
     loop {
         let (ip, result) = {
             let State{ip, http} = state.read().await.clone();

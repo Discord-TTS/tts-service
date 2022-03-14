@@ -1,9 +1,13 @@
 use tokio::io::AsyncReadExt;
 
-use crate::Error;
+use crate::{Error, TTSMode};
 
 
-pub(crate) async fn get_tts(text: &str, voice: &str) -> std::io::Result<Vec<u8>> {
+pub(crate) async fn get_tts(text: &str, voice: &str) -> Result<Vec<u8>, Error> {
+    if !VOICES.iter().any(|s| s.as_str() == voice) {
+        return Err(Error::InvalidVoice(TTSMode::eSpeak))
+    }
+
     // We have to loop due to random "unable to get .wav header" errors.
     let mut i = 1;
     let mut raw_wav = loop {
@@ -32,7 +36,7 @@ pub(crate) async fn get_tts(text: &str, voice: &str) -> std::io::Result<Vec<u8>>
             let mut stderr = Vec::new();
             espeak_stderr.read_to_end(&mut stderr).await?;
 
-            if String::from_utf8(stderr).unwrap().contains("mbrowrap error: unable to get .wav header from mbrola") {
+            if std::str::from_utf8(&stderr).unwrap().contains("mbrowrap error: unable to get .wav header from mbrola") {
                 i += 1;
                 continue
             }
@@ -54,7 +58,7 @@ pub(crate) async fn get_tts(text: &str, voice: &str) -> std::io::Result<Vec<u8>>
     Ok(raw_wav)
 }
 
-pub(crate) fn get_voices() -> Vec<String> {
+static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
     || -> Result<_, Error> {
         let (_, mut voice_path) = espeakng::Speaker::info();
         voice_path.push("voices/mb");
@@ -76,4 +80,8 @@ pub(crate) fn get_voices() -> Vec<String> {
 
         Ok(files)
     }().unwrap()
+});
+
+pub(crate) fn get_voices() -> Vec<String> {
+    VOICES.iter().cloned().collect()
 }
