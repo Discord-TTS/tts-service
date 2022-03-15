@@ -29,7 +29,7 @@ RUN cargo build --release --no-default-features --features $MODES
 # Now make the runtime container
 FROM debian:bullseye-slim
 
-RUN apt-get update && apt-get upgrade && \
+RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y openssl ca-certificates git subversion make autoconf automake libtool pkg-config g++ && \
     apt-get clean && \
     # Build and install espeak-ng
@@ -37,7 +37,7 @@ RUN apt-get update && apt-get upgrade && \
     ./autogen.sh && ./configure && make && make install && \ 
     cd .. && rm -rf espeak-ng && mv /usr/local/lib/libespeak* /usr/lib && \
     # Build and install mbrola
-    git clone https://github.com/numediart/MBROLA && cd MBROLA && make && cp Bin/mbrola /usr/bin/mbrola && cd .. && rm -rf MBROLA && \
+    git clone https://github.com/numediart/MBROLA --depth 1 && cd MBROLA && make && cp Bin/mbrola /usr/bin/mbrola && cd .. && rm -rf MBROLA && \
     # Download the mbrola voices to /usr/share/mbrola.
     svn export https://github.com/numediart/MBROLA-voices/trunk/data /usr/share/mbrola
 
