@@ -24,9 +24,9 @@ default-features = false
 features = ["smallvec", "fmt", "ansi", "parking_lot"]
 
 [dependencies.axum]
-version = "0.4"
+version = "0.5"
 default-features = false
-features = ["http1", "http2", "json"]
+features = ["http1", "http2", "json", "query"]
 
 [dependencies.tokio]
 version = "1"
