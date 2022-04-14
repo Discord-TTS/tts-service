@@ -41,7 +41,11 @@ RUN apt-get update && apt-get upgrade -y && \
     # Download the mbrola voices to /usr/share/mbrola.
     svn export https://github.com/numediart/MBROLA-voices/trunk/data /usr/share/mbrola
 
+# Download tini to avoid zombie processes
+ADD https://github.com/krallin/tini/releases/latest/download/tini /usr/local/bin/tini
+RUN chmod +x /usr/local/bin/tini
+
 COPY --from=builder /build/target/release/tts-service /usr/local/bin/tts-service
 COPY Cargo.lock .
 
-CMD ["/usr/local/bin/tts-service"]
+CMD ["/usr/local/bin/tini", "/usr/local/bin/tts-service"]
