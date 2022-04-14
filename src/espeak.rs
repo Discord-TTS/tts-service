@@ -3,7 +3,7 @@ use tokio::io::AsyncReadExt;
 use crate::{Error, TTSMode};
 
 
-pub(crate) async fn get_tts(text: &str, voice: &str) -> Result<Vec<u8>, Error> {
+pub(crate) async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<Vec<u8>, Error> {
     if !VOICES.iter().any(|s| s.as_str() == voice) {
         return Err(Error::InvalidVoice(TTSMode::eSpeak))
     }
@@ -14,7 +14,7 @@ pub(crate) async fn get_tts(text: &str, voice: &str) -> Result<Vec<u8>, Error> {
         let espeak_process = tokio::process::Command::new("espeak")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .args(["--pho", "-q", "-v", &format!("mb/mb-{}", voice), text])
+            .args(["--pho", "-q", "-s", &speaking_rate.to_string(), "-v", &format!("mb/mb-{}", voice), text])
             .spawn()?;
 
         let tokio::process::Child{stdout, stderr, ..} = espeak_process;

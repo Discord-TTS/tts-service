@@ -119,11 +119,9 @@ pub(crate) fn get_voices() -> Vec<String> {
         let mode_variant: String = gvoice.name.split_inclusive('-').skip(2).collect();
         let (mode, variant) = mode_variant.split_once('-').unwrap();
 
-        if mode == "Standard" {
+        (mode == "Standard").then(|| {
             let [language] = gvoice.languageCodes;
-            Some(format!("{language} {variant}"))
-        } else {
-            None
-        }
+            format!("{language} {variant}")
+        })
     }).collect()
 }

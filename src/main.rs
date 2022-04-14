@@ -49,6 +49,9 @@ async fn get_tts(
 ) -> Result<impl axum::response::IntoResponse, Error> {
     let GetTTS{text, lang, mode, speaking_rate} = payload;
 
+    #[cfg(any(feature="premium", feature="espeak"))]
+    mode.check_speaking_rate(speaking_rate)?;
+
     let cache_key = format!("{text} | {lang} | {mode} | {speaking_rate}");
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
@@ -84,10 +87,13 @@ async fn get_tts(
         None => {
             let data = match mode {
                 #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &lang).await?.bytes().await?,
-                #[cfg(feature="espeak")] TTSMode::eSpeak => bytes::Bytes::from(espeak::get_tts(&text, &lang).await?),
-                #[cfg(feature="premium")] TTSMode::Premium => bytes::Bytes::from(premium::get_tts(
-                    &state.premium, &text, &lang, speaking_rate).await?
-                ),
+                #[cfg(feature="espeak")] TTSMode::eSpeak => {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    bytes::Bytes::from(espeak::get_tts(&text, &lang, speaking_rate as u16).await?)
+                },
+                #[cfg(feature="premium")] TTSMode::Premium => {
+                    bytes::Bytes::from(premium::get_tts(&state.premium, &text, &lang, speaking_rate).await?)
+                }
             };
 
             tracing::debug!("Generated TTS from {cache_key}");
@@ -121,6 +127,26 @@ enum TTSMode {
     #[cfg(feature="gtts")] gTTS,
     #[cfg(feature="espeak")] eSpeak,
     #[cfg(feature="premium")] Premium,
+}
+
+#[cfg(any(feature="premium", feature="espeak"))]
+impl TTSMode {
+    fn check_speaking_rate(self, speaking_rate: f32) -> Result<(), Error> {
+        if self.max_speaking_rate().map_or(false, |max| speaking_rate > max) {
+            Err(Error::InvalidSpeakingRate(self))
+        } else {
+            Ok(())
+        }
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    fn max_speaking_rate(self) -> Option<f32> {
+        match self {
+            #[cfg(feature="gtts")]    Self::gTTS    => None,
+            #[cfg(feature="espeak")]  Self::eSpeak  => Some(400.0),
+            #[cfg(feature="premium")] Self::Premium => Some(4.0),
+        }
+    }
 }
 
 impl Display for TTSMode {
@@ -204,6 +230,7 @@ async fn main() -> Result<(), Error> {
 
 #[derive(Debug)]
 enum Error {
+    #[cfg(any(feature="premium", feature="espeak"))] InvalidSpeakingRate(TTSMode),
     #[cfg(any(feature="gtts", feature="espeak"))] InvalidVoice(TTSMode),
     #[cfg(feature="gtts")] Reqwest(reqwest::Error),
     Unknown(Box<dyn std::error::Error + Send + Sync>)
@@ -229,9 +256,14 @@ where E: Into<Box<dyn std::error::Error + Send + Sync>> {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(any(feature="gtts", feature="espeak"))] Self::InvalidVoice(mode) => write!(f, "Invalid voice for TTS, see /voices?mode={mode}"),
+            Self::Unknown(err) => write!(f, "{:?}", err),
             #[cfg(feature="gtts")] Self::Reqwest(err) => write!(f, "Reqwest Error: {:?}", err),
-            Self::Unknown(err) => write!(f, "{:?}", err)
+            #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(mode) => {
+                write!(f, "Invalid speaking rate, it must be between 0 and {}, as a 32-bit float", mode.max_speaking_rate().unwrap())
+            }
+            #[cfg(any(feature="gtts", feature="espeak"))] Self::InvalidVoice(mode) => {
+                write!(f, "Invalid voice for TTS, see /voices?mode={mode}")
+            }
         }
     }
 }
@@ -242,6 +274,7 @@ impl axum::response::IntoResponse for Error {
         axum::response::Response::builder()
             .status(match self {
                 #[cfg(any(feature="gtts", feature="espeak"))] Self::InvalidVoice(_) => 400,
+                #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 400,
                 _ => 500
             })
             .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self))))
