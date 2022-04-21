@@ -46,7 +46,7 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client), Error>
         let ip = ipgen::ip(&name, ip_block).unwrap();
 
         let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_millis(500))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .local_address(Some(ip))
             .build()?;
 
