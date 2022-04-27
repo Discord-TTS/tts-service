@@ -109,8 +109,19 @@ pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speak
         .json(&generate_google_json(text, lang, speaking_rate)?)
         .send().await?.error_for_status()?;
 
-    let data: serde_json::Value = resp.json().await?;
-    Ok(base64::decode(data["audioContent"].as_str().unwrap())?)
+    let audio = {
+        #[derive(serde::Deserialize)]
+        struct AudioResponse<'a> {
+            #[serde(borrow, rename="audioContent")]
+            audio_content: &'a str,
+        }
+
+        let resp_raw = resp.bytes().await?;
+        let audio_response: AudioResponse = serde_json::from_slice(&resp_raw)?;
+        base64::decode(audio_response.audio_content)?
+    };
+
+    Ok(audio)
 }
 
 pub(crate) fn get_voices() -> Vec<String> {
