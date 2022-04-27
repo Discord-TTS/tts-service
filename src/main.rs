@@ -14,6 +14,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[cfg(feature="espeak")] mod espeak;
 #[cfg(feature="premium")] mod premium;
 
+type Result<T> = std::result::Result<T, anyhow::Error>;
+type ResponseResult<T> = std::result::Result<T, Error>;
 
 #[derive(serde::Deserialize)]
 struct GetVoices {
@@ -22,7 +24,7 @@ struct GetVoices {
 
 async fn get_voices(
     axum::extract::Query(payload): axum::extract::Query<GetVoices>
-) -> Result<impl axum::response::IntoResponse, Error> {
+) -> ResponseResult<impl axum::response::IntoResponse> {
     let GetVoices{mode} = payload;
 
     let voices: Vec<String> = match mode {
@@ -46,7 +48,7 @@ struct GetTTS {
 async fn get_tts(
     state: Arc<State>,
     axum::extract::Query(payload): axum::extract::Query<GetTTS>
-) -> Result<impl axum::response::IntoResponse, Error> {
+) -> ResponseResult<impl axum::response::IntoResponse> {
     let GetTTS{text, lang, mode, speaking_rate} = payload;
 
     #[cfg(any(feature="premium", feature="espeak"))]
@@ -131,12 +133,14 @@ enum TTSMode {
 
 #[cfg(any(feature="premium", feature="espeak"))]
 impl TTSMode {
-    fn check_speaking_rate(self, speaking_rate: f32) -> Result<(), Error> {
-        if self.max_speaking_rate().map_or(false, |max| speaking_rate > max) {
-            Err(Error::InvalidSpeakingRate(self))
-        } else {
-            Ok(())
+    fn check_speaking_rate(self, speaking_rate: f32) -> Result<()> {
+        if let Some(max) = self.max_speaking_rate() {
+            if speaking_rate > max {
+                anyhow::bail!("Invalid speaking rate, it must be between 0 and {max}, as a 32-bit float")
+            }
         }
+
+        Ok(())
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -173,7 +177,7 @@ struct State {
 
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<()> {
     let fmt_layer = tracing_subscriber::fmt::layer();
     let filter = tracing_subscriber::filter::LevelFilter::from_str(
         &std::env::var("LOG_LEVEL")
@@ -229,42 +233,14 @@ async fn main() -> Result<(), Error> {
 
 
 #[derive(Debug)]
-enum Error {
-    #[cfg(any(feature="premium", feature="espeak"))] InvalidSpeakingRate(TTSMode),
-    #[cfg(any(feature="gtts", feature="espeak"))] InvalidVoice(TTSMode),
-    #[cfg(feature="gtts")] Reqwest(reqwest::Error),
-    Unknown(Box<dyn std::error::Error + Send + Sync>)
+struct Error {
+    inner: anyhow::Error
 }
 
 impl<E> From<E> for Error
-where E: Into<Box<dyn std::error::Error + Send + Sync>> {
-    fn from(e: E) -> Self {
-        #[allow(unused_mut)]
-        let mut err: Box<dyn std::error::Error + Send + Sync> = e.into();
-
-        #[cfg(feature="gtts")] {
-            err = match err.downcast::<reqwest::Error>() {
-                Ok(err) => return Self::Reqwest(*err),
-                Err(err) => err,
-            };
-        }
-
-        Self::Unknown(err)
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unknown(err) => write!(f, "{:?}", err),
-            #[cfg(feature="gtts")] Self::Reqwest(err) => write!(f, "Reqwest Error: {:?}", err),
-            #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(mode) => {
-                write!(f, "Invalid speaking rate, it must be between 0 and {}, as a 32-bit float", mode.max_speaking_rate().unwrap())
-            }
-            #[cfg(any(feature="gtts", feature="espeak"))] Self::InvalidVoice(mode) => {
-                write!(f, "Invalid voice for TTS, see /voices?mode={mode}")
-            }
-        }
+where E: Into<anyhow::Error> {
+    fn from(err: E) -> Self {
+        Self {inner: err.into()}
     }
 }
 
@@ -272,12 +248,8 @@ impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         tracing::error!("{self:?}");
         axum::response::Response::builder()
-            .status(match self {
-                #[cfg(any(feature="gtts", feature="espeak"))] Self::InvalidVoice(_) => 400,
-                #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 400,
-                _ => 500
-            })
-            .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self))))
+            .status(500)
+            .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self.inner))))
             .unwrap()
     }
 }

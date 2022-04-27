@@ -1,7 +1,7 @@
 use tokio::sync::RwLock;
 use rand::Rng;
 
-use crate::{Error, TTSMode};
+use crate::Result;
 
 
 #[derive(Clone)]
@@ -11,7 +11,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn new() -> Result<RwLock<Self>, Error> {
+    pub async fn new() -> Result<RwLock<Self>> {
         Ok(RwLock::new({
             let (ip, http) = get_random_ipv6().await?;
             Self {ip, http}
@@ -31,7 +31,7 @@ fn parse_url(text: &str, lang: &str) -> reqwest::Url {
     url
 }
 
-async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client), Error> {
+async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client)> {
     let ip_block = std::env::var("IPV6_BLOCK")
         .expect("IPV6_BLOCK not set!").parse()
         .expect("Invalid IPV6 Block!");
@@ -52,7 +52,7 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client), Error>
 
         match client.get(parse_url("Hello", "en")).send().await {
             Err(err) if err.is_timeout() => tracing::warn!("Generated IP {} timed out!", ip),
-            Err(err) => break Err(Error::Reqwest(err)),
+            Err(err) => break Err(err.into()),
             Ok(_) => {
                 tracing::warn!("Generated random IP: {}", ip);
                 break Ok((ip, client))
@@ -62,20 +62,20 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client), Error>
 }
 
 
-pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str) -> Result<reqwest::Response, Error> {
-    if !get_voices().iter().any(|s| s.as_str() == lang) {
-        return Err(Error::InvalidVoice(TTSMode::gTTS))
+pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<reqwest::Response> {
+    if !get_voices().iter().any(|s| s.as_str() == voice) {
+        anyhow::bail!("Invalid voice: {voice}");
     }
 
     loop {
         let (ip, result) = {
             let State{ip, http} = state.read().await.clone();
-            (ip, http.get(parse_url(text, lang)).send().await)
+            (ip, http.get(parse_url(text, voice)).send().await)
         };
 
         match result {
             Ok(resp) if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS => break Ok(resp),
-            Err(err) if !err.is_timeout() => break Err(Error::from(err)),
+            Err(err) if !err.is_timeout() => break Err(err.into()),
             _ => {
                 // Generate a new client, with an new IP, and try again
                 tracing::warn!("IP {} has been blocked!", ip);

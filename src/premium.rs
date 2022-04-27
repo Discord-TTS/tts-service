@@ -1,6 +1,6 @@
 use tokio::sync::RwLock;
 
-use crate::Error;
+use crate::Result;
 
 
 #[derive(Clone)]
@@ -12,7 +12,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new() -> Result<RwLock<Self>, Error> {
+    pub(crate) fn new() -> Result<RwLock<Self>> {
         let service_account = serde_json::from_str(&std::fs::read_to_string(std::env::var("GOOGLE_APPLICATION_CREDENTIALS").unwrap())?)?;
         let (jwt_token, expire_time) = generate_jwt(&service_account, &std::time::SystemTime::now())?.unwrap();
 
@@ -40,9 +40,9 @@ pub struct GoogleVoice<'a> {
 }
 
 
-fn generate_google_json(content: &str, lang: &str, speaking_rate: f32) -> Result<serde_json::Value, Error> {
+fn generate_google_json(content: &str, lang: &str, speaking_rate: f32) -> Result<serde_json::Value> {
     let (lang, variant) = lang.split_once(' ').ok_or_else(|| 
-        format!("{} cannot be parsed into lang and variant", lang)
+        anyhow::anyhow!("{} cannot be parsed into lang and variant", lang)
     )?;
 
     Ok(
@@ -63,7 +63,7 @@ fn generate_google_json(content: &str, lang: &str, speaking_rate: f32) -> Result
 }
 
 
-fn generate_jwt(service_account: &ServiceAccount, expire_time: &std::time::SystemTime) -> Result<Option<(String, std::time::SystemTime)>, Error> {
+fn generate_jwt(service_account: &ServiceAccount, expire_time: &std::time::SystemTime) -> Result<Option<(String, std::time::SystemTime)>> {
     let current_time = std::time::SystemTime::now();
     if &current_time > expire_time  {
         let private_key_raw = &service_account.private_key;
@@ -87,7 +87,7 @@ fn generate_jwt(service_account: &ServiceAccount, expire_time: &std::time::Syste
     }
 }
 
-pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rate: f32) -> Result<Vec<u8>, Error> {
+pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rate: f32) -> Result<Vec<u8>> {
     let State{jwt_token, expire_time, reqwest, service_account} = state.read().await.clone();
 
     let jwt_token = {

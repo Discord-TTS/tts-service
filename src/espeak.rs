@@ -1,11 +1,11 @@
 use tokio::io::AsyncReadExt;
 
-use crate::{Error, TTSMode};
+use crate::Result;
 
 
-pub(crate) async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<Vec<u8>, Error> {
+pub(crate) async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<Vec<u8>> {
     if !VOICES.iter().any(|s| s.as_str() == voice) {
-        return Err(Error::InvalidVoice(TTSMode::eSpeak))
+        anyhow::bail!("Invalid voice: {voice}");
     }
 
     // We have to loop due to random "unable to get .wav header" errors.
@@ -59,7 +59,7 @@ pub(crate) async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Resu
 }
 
 static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
-    || -> Result<_, Error> {
+    || -> Result<_> {
         let (_, mut voice_path) = espeakng::Speaker::info();
         voice_path.push("voices/mb");
 
