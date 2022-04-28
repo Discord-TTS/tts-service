@@ -1,5 +1,6 @@
-use tokio::sync::RwLock;
+use bytes::Buf;
 use rand::Rng;
+use tokio::sync::RwLock;
 
 use crate::Result;
 
@@ -62,20 +63,20 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client)> {
 }
 
 
-pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<reqwest::Response> {
+pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str, max_length: Option<u64>) -> Result<bytes::Bytes> {
     if !get_voices().iter().any(|s| s.as_str() == voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
 
-    loop {
+    let audio_data = loop {
         let (ip, result) = {
             let State{ip, http} = state.read().await.clone();
             (ip, http.get(parse_url(text, voice)).send().await)
         };
 
         match result {
-            Ok(resp) if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS => break Ok(resp),
-            Err(err) if !err.is_timeout() => break Err(err.into()),
+            Ok(resp) if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS => break resp.bytes().await?,
+            Err(err) if !err.is_timeout() => return Err(err.into()),
             _ => {
                 // Generate a new client, with an new IP, and try again
                 tracing::warn!("IP {} has been blocked!", ip);
@@ -86,7 +87,15 @@ pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> R
                 state.ip = new_ip;
             }
         }
+    };
+
+    if let Some(max_length) = max_length {
+        if mp3_duration::from_read(&mut audio_data.clone().reader())?.as_secs() >= max_length {
+            anyhow::bail!("Audio is over max length!");
+        };
     }
+
+    Ok(audio_data)
 }
 
 pub(crate) fn get_voices() -> Vec<String> {

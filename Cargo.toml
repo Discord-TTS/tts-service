@@ -17,6 +17,7 @@ tracing = "0.1"
 fernet = "0.1"
 sha2 = "0.10"
 anyhow = "1"
+cfg-if = "1"
 bytes = "1"
 
 [dependencies.tracing-subscriber]
@@ -63,13 +64,16 @@ version = "8"
 optional = true
 
 [dependencies.espeakng]
-version = "0.1.1"
+version = "0.1"
 optional = true
 
+[dependencies.mp3-duration]
+version = "0.1"
+optional = true
 
 [features]
 premium = ["reqwest", "reqwest/json", "jsonwebtoken", "base64"]
 espeak = ["tokio/process", "tokio/io-util", "espeakng"]
-gtts = ["rand", "reqwest", "ipgen"]
+gtts = ["rand", "reqwest", "ipgen", "mp3-duration"]
 
 default = ["espeak"]

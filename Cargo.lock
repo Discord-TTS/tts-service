@@ -768,6 +768,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp3-duration"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "348bdc7300502f0801e5b57c448815713cd843b744ef9bda252a2698fdf90a0f"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1540,9 +1549,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79dd37121c38240c4b4fe6520332406218bbf876f2f690fe9e406020189366fd"
+checksum = "f7755f984aa46a9d50829dc84b6a674b2f3b8b4de47c0708923953b090d48acc"
 dependencies = [
  "bitflags",
  "bytes",
@@ -1631,11 +1640,13 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "cfg-if",
  "deadpool-redis",
  "espeakng",
  "fernet",
  "ipgen",
  "jsonwebtoken",
+ "mp3-duration",
  "once_cell",
  "parking_lot",
  "rand",

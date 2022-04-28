@@ -1,5 +1,5 @@
 #![warn(clippy::pedantic)]
-#![allow(clippy::unused_async)]
+#![allow(clippy::unused_async, clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_lossless)]
 
 #[cfg(not(any(feature="gtts", feature="espeak", feature="premium")))] 
 compile_error!("Either feature `gtts`, `espeak`, or `premium` must be enabled!");
@@ -36,20 +36,26 @@ async fn get_voices(
     Ok(axum::Json(voices))
 }
 
-
 #[derive(serde::Deserialize)]
 struct GetTTS {
     text: String,
     lang: String,
     mode: TTSMode,
-    #[serde(default)] speaking_rate: f32
+    #[cfg(any(feature="gtts", feature="espeak"))] max_length: Option<u64>,
+    #[serde(default)] speaking_rate: f32,
 }
 
 async fn get_tts(
     state: Arc<State>,
     axum::extract::Query(payload): axum::extract::Query<GetTTS>
 ) -> ResponseResult<impl axum::response::IntoResponse> {
-    let GetTTS{text, lang, mode, speaking_rate} = payload;
+    cfg_if::cfg_if!(
+        if #[cfg(any(feature="gtts", feature="espeak"))] {
+            let GetTTS{text, lang, mode, speaking_rate, max_length} = payload;
+        } else {
+            let GetTTS{text, lang, mode, speaking_rate} = payload;
+        }
+    );
 
     #[cfg(any(feature="premium", feature="espeak"))]
     mode.check_speaking_rate(speaking_rate)?;
@@ -88,10 +94,9 @@ async fn get_tts(
         }
         None => {
             let data = match mode {
-                #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &lang).await?.bytes().await?,
+                #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &lang, max_length).await?,
                 #[cfg(feature="espeak")] TTSMode::eSpeak => {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    bytes::Bytes::from(espeak::get_tts(&text, &lang, speaking_rate as u16).await?)
+                    bytes::Bytes::from(espeak::get_tts(&text, &lang, max_length.map(|l| l as u32), speaking_rate as u16).await?)
                 },
                 #[cfg(feature="premium")] TTSMode::Premium => {
                     bytes::Bytes::from(premium::get_tts(&state.premium, &text, &lang, speaking_rate).await?)
@@ -246,7 +251,7 @@ where E: Into<anyhow::Error> {
 
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
-        tracing::error!("{self:?}");
+        tracing::error!("{:?}", self.inner);
         axum::response::Response::builder()
             .status(500)
             .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self.inner))))
