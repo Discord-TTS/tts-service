@@ -4,7 +4,7 @@ use crate::Result;
 
 
 #[derive(Clone)]
-pub(crate) struct State {
+pub struct State {
     service_account: ServiceAccount,
     expire_time: std::time::SystemTime,
     reqwest: reqwest::Client,
@@ -93,7 +93,7 @@ fn generate_jwt(service_account: &ServiceAccount, expire_time: &std::time::Syste
     }
 }
 
-pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rate: f32) -> Result<bytes::Bytes> {
+pub async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rate: f32) -> Result<bytes::Bytes> {
     let State{jwt_token, expire_time, reqwest, service_account} = state.read().await.clone();
 
     let jwt_token = {
@@ -134,10 +134,10 @@ static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|
     }).collect()
 });
 
-pub(crate) fn check_voice(voice: &str) -> bool {
+pub fn check_voice(voice: &str) -> bool {
     VOICES.iter().any(|s| s.as_str() == voice)
 }
 
-pub(crate) fn get_voices() -> Vec<String> {
+pub fn get_voices() -> Vec<String> {
     VOICES.iter().cloned().collect()
 }

@@ -131,9 +131,9 @@ impl TTSMode {
 
     fn check_voice(self, voice: &str) -> ResponseResult<()> {
         if match self {
-            #[cfg(feature="gtts")] TTSMode::gTTS => gtts::check_voice(voice),
-            #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::check_voice(voice),
-            #[cfg(feature="premium")] TTSMode::Premium => premium::check_voice(voice),
+            #[cfg(feature="gtts")] Self::gTTS => gtts::check_voice(voice),
+            #[cfg(feature="espeak")] Self::eSpeak => espeak::check_voice(voice),
+            #[cfg(feature="premium")] Self::Premium => premium::check_voice(voice),
         } {
             Ok(())
         } else {
@@ -168,7 +168,7 @@ impl TTSMode {
 
     #[allow(clippy::unnecessary_wraps)]
     #[cfg(any(feature="premium", feature="espeak"))]
-    fn max_speaking_rate(self) -> Option<f32> {
+    const fn max_speaking_rate(self) -> Option<f32> {
         match self {
             #[cfg(feature="gtts")]    Self::gTTS    => None,
             #[cfg(feature="espeak")]  Self::eSpeak  => Some(400.0),
@@ -267,7 +267,7 @@ enum Error {
 
 impl<E: Into<anyhow::Error>> From<E> for Error {
     fn from(e: E) -> Self {
-        Error::Unknown(e.into())
+        Self::Unknown(e.into())
     }
 }
 

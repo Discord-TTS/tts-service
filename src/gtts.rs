@@ -6,7 +6,7 @@ use crate::Result;
 
 
 #[derive(Clone)]
-pub(crate) struct State {
+pub struct State {
     ip: std::net::IpAddr,
     http: reqwest::Client
 }
@@ -63,7 +63,7 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client)> {
 }
 
 
-pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<bytes::Bytes> {
+pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<bytes::Bytes> {
     loop {
         let (ip, result) = {
             let State{ip, http} = state.read().await.clone();
@@ -86,14 +86,14 @@ pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> R
     }
 }
 
-pub(crate) fn check_voice(voice: &str) -> bool {
+pub fn check_voice(voice: &str) -> bool {
     get_voices().iter().any(|s| s.as_str() == voice)
 }
 
-pub(crate) fn check_length(audio: &[u8], max_length: u64) -> bool {
+pub fn check_length(audio: &[u8], max_length: u64) -> bool {
     mp3_duration::from_read(&mut audio.reader()).unwrap().as_secs() > max_length
 }
 
-pub(crate) fn get_voices() -> Vec<String> {
+pub fn get_voices() -> Vec<String> {
     serde_json::from_str(include_str!("data/voices-gtts.json")).unwrap()
 }

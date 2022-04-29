@@ -2,7 +2,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::Result;
 
-pub(crate) async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<bytes::Bytes> {
+pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<bytes::Bytes> {
     if !VOICES.iter().any(|s| s.as_str() == voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
@@ -57,7 +57,7 @@ pub(crate) async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Resu
     Ok(bytes::Bytes::from(raw_wav))
 }
 
-pub(crate) fn check_length(audio: &[u8], max_length: u32) -> bool {
+pub fn check_length(audio: &[u8], max_length: u32) -> bool {
     audio.len() as u32 / (
         u16::from_le_bytes(audio[22..24].try_into().unwrap()) as u32 * // Sample Rate
         u32::from_le_bytes(audio[24..28].try_into().unwrap()) *        // Number of Channels
@@ -91,10 +91,10 @@ static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|
     }().unwrap()
 });
 
-pub(crate) fn check_voice(voice: &str) -> bool {
+pub fn check_voice(voice: &str) -> bool {
     VOICES.iter().any(|s| s.as_str() == voice)
 }
 
-pub(crate) fn get_voices() -> Vec<String> {
+pub fn get_voices() -> Vec<String> {
     VOICES.iter().cloned().collect()
 }
