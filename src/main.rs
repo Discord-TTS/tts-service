@@ -57,6 +57,7 @@ async fn get_tts(
 
     #[cfg(any(feature="premium", feature="espeak"))]
     mode.check_speaking_rate(speaking_rate)?;
+    mode.check_voice(&voice)?;
 
     let cache_key = format!("{text} | {voice} | {mode} | {speaking_rate}");
     tracing::debug!("Recieved request to TTS: {cache_key}");
@@ -128,25 +129,37 @@ impl TTSMode {
             .unwrap()
     }
 
+    fn check_voice(self, voice: &str) -> ResponseResult<()> {
+        if match self {
+            #[cfg(feature="gtts")] TTSMode::gTTS => gtts::check_voice(voice),
+            #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::check_voice(voice),
+            #[cfg(feature="premium")] TTSMode::Premium => premium::check_voice(voice),
+        } {
+            Ok(())
+        } else {
+            Err(Error::UnknownVoice(voice.to_owned()))
+        }
+    }
+
     #[cfg(any(feature="gtts", feature="espeak"))]
     #[allow(unused_variables)]
-    fn check_length(self, audio: &[u8], max_length: Option<u64>) -> Result<()> {
-        if !max_length.map_or(true, |max_length| match self {
+    fn check_length(self, audio: &[u8], max_length: Option<u64>) -> ResponseResult<()> {
+        if max_length.map_or(true, |max_length| match self {
             #[cfg(feature="gtts")]    Self::gTTS    => gtts::check_length(audio, max_length),
             #[cfg(feature="espeak")]  Self::eSpeak  => espeak::check_length(audio, max_length as u32),
             #[cfg(feature="premium")] Self::Premium => true,
         }) {
-            anyhow::bail!("TTS audio is too long!")
+            Ok(())
+        } else {
+            Err(Error::AudioTooLong)
         }
-
-        Ok(())
     }
 
     #[cfg(any(feature="premium", feature="espeak"))]
-    fn check_speaking_rate(self, speaking_rate: f32) -> Result<()> {
+    fn check_speaking_rate(self, speaking_rate: f32) -> ResponseResult<()> {
         if let Some(max) = self.max_speaking_rate() {
             if speaking_rate > max {
-                anyhow::bail!("Invalid speaking rate, it must be between 0 and {max}, as a 32-bit float")
+                return Err(Error::InvalidSpeakingRate(speaking_rate))
             }
         }
 
@@ -244,23 +257,45 @@ async fn main() -> Result<()> {
 
 
 #[derive(Debug)]
-struct Error {
-    inner: anyhow::Error
+enum Error {
+    UnknownVoice(String),
+    #[cfg(any(feature="gtts", feature="espeak"))] AudioTooLong,
+    #[cfg(any(feature="premium", feature="espeak"))] InvalidSpeakingRate(f32),
+
+    Unknown(anyhow::Error),
 }
 
-impl<E> From<E> for Error
-where E: Into<anyhow::Error> {
-    fn from(err: E) -> Self {
-        Self {inner: err.into()}
+impl<E: Into<anyhow::Error>> From<E> for Error {
+    fn from(e: E) -> Self {
+        Error::Unknown(e.into())
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(rate) => write!(f, "Invalid speaking rate: {rate}"),
+            #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => f.write_str("Max length exceeded!"),
+            Self::UnknownVoice(voice) => write!(f, "Unknown voice: {voice}"),
+            Self::Unknown(e) => write!(f, "Unknown error: {e}"),
+        }
     }
 }
 
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
-        tracing::error!("{:?}", self.inner);
+        if let Error::Unknown(inner) = &self {
+            tracing::error!("{inner:?}");
+        };
+
         axum::response::Response::builder()
-            .status(500)
-            .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self.inner))))
+            .status(match self {
+                #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 400,
+                #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => 400,
+                Self::UnknownVoice(_) => 400,
+                Self::Unknown(_) => 500,
+            })
+            .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self))))
             .unwrap()
     }
 }

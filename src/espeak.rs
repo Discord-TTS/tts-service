@@ -66,6 +66,7 @@ pub(crate) fn check_length(audio: &[u8], max_length: u32) -> bool {
     ) > max_length
 }
 
+
 static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
     || -> Result<_> {
         let (_, mut voice_path) = espeakng::Speaker::info();
@@ -89,6 +90,10 @@ static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|
         Ok(files)
     }().unwrap()
 });
+
+pub(crate) fn check_voice(voice: &str) -> bool {
+    VOICES.iter().any(|s| s.as_str() == voice)
+}
 
 pub(crate) fn get_voices() -> Vec<String> {
     VOICES.iter().cloned().collect()

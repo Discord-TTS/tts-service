@@ -64,10 +64,6 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client)> {
 
 
 pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<bytes::Bytes> {
-    if !get_voices().iter().any(|s| s.as_str() == voice) {
-        anyhow::bail!("Invalid voice: {voice}");
-    }
-
     loop {
         let (ip, result) = {
             let State{ip, http} = state.read().await.clone();
@@ -88,6 +84,10 @@ pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> R
             }
         }
     }
+}
+
+pub(crate) fn check_voice(voice: &str) -> bool {
+    get_voices().iter().any(|s| s.as_str() == voice)
 }
 
 pub(crate) fn check_length(audio: &[u8], max_length: u64) -> bool {
