@@ -8,11 +8,20 @@ HTTP microservice using Axum to generate TTS from an HTTP reqwest.
 - Premium - Cloud TTS, high quality. Returns OPUS audio. **Requires a gCloud API key**
 
 ## Supported endpoints:
-- `GET /tts?text={CONTENT}&voice={VOICE}&mode={MODE}` - Returns the audio generated. 
+- `GET /tts?text={CONTENT}&lang={VOICE}&mode={MODE}&speaking_rate={SPEAKING_RATE}&max_length={MAX_LENGTH}` - Returns the audio generated.
 - `GET /voices?mode={MODE}` - Returns the supported voices for the given mode as a JSON array of strings.
 - `GET /modes` - Returns the currently supported modes for TTS as a JSON array of strings.
 
-It is undefined what body non-200 requests will return, if any.
+## Error Codes:
+Non-200 responses will return a JSON object with the following keys:
+
+### `code` - int
+- `0` - Unknown error
+- `1` - Unknown voice
+- `2` - Max length exceeded
+- `3` - Speaking rate exceeded limits, see the `display` for more information
+### `display` - str
+A human readable message describing the error
 
 ## Environment Variables (default)
 - `IPV6_BLOCK` - A block of IPv6 addresses, randomly selected for each gTTS request

@@ -288,6 +288,16 @@ impl axum::response::IntoResponse for Error {
             tracing::error!("{inner:?}");
         };
 
+        let json_err = serde_json::json!({
+            "display": self.to_string(),
+            "code": match self {
+                #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 3_u8,
+                #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => 2,
+                Self::UnknownVoice(_) => 1,
+                Self::Unknown(_) => 0,
+            },
+        });
+
         axum::response::Response::builder()
             .status(match self {
                 #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 400,
@@ -295,7 +305,7 @@ impl axum::response::IntoResponse for Error {
                 Self::UnknownVoice(_) => 400,
                 Self::Unknown(_) => 500,
             })
-            .body(axum::body::boxed(axum::body::Full::from(format!("{:?}", self))))
+            .body(axum::body::boxed(axum::body::Full::from(json_err.to_string())))
             .unwrap()
     }
 }
