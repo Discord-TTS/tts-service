@@ -27,22 +27,20 @@ async fn get_voices(
 ) -> ResponseResult<impl axum::response::IntoResponse> {
     let GetVoices{mode} = payload;
 
-    let voices: Vec<String> = match mode {
+    Ok(axum::Json(match mode {
         #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_voices(),
         #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices(),
         #[cfg(feature="premium")] TTSMode::Premium => premium::get_voices(),
-    };
-
-    Ok(axum::Json(voices))
+    }))
 }
 
 #[derive(serde::Deserialize)]
 struct GetTTS {
     text: String,
-    lang: String,
     mode: TTSMode,
-    #[cfg(any(feature="gtts", feature="espeak"))] max_length: Option<u64>,
     #[serde(default)] speaking_rate: f32,
+    #[serde(rename="lang")] voice: String,
+    #[cfg(any(feature="gtts", feature="espeak"))] max_length: Option<u64>,
 }
 
 async fn get_tts(
@@ -51,80 +49,62 @@ async fn get_tts(
 ) -> ResponseResult<impl axum::response::IntoResponse> {
     cfg_if::cfg_if!(
         if #[cfg(any(feature="gtts", feature="espeak"))] {
-            let GetTTS{text, lang, mode, speaking_rate, max_length} = payload;
+            let GetTTS{text, voice, mode, speaking_rate, max_length} = payload;
         } else {
-            let GetTTS{text, lang, mode, speaking_rate} = payload;
+            let GetTTS{text, voice, mode, speaking_rate} = payload;
         }
     );
 
     #[cfg(any(feature="premium", feature="espeak"))]
     mode.check_speaking_rate(speaking_rate)?;
 
-    let cache_key = format!("{text} | {lang} | {mode} | {speaking_rate}");
+    let cache_key = format!("{text} | {voice} | {mode} | {speaking_rate}");
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
-    let cache_hash = if state.redis.is_some() {
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(cache_key.as_bytes());
-        Some(hasher.finalize())
-    } else {
-        None
-    };
+    let redis_info = if let Some(redis_state) = &state.redis {
+        let cache_hash = {
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(&cache_key);
+            hasher.finalize()
+        };
 
-    let mut redis = None;
-    let cached_audio = if let Some(redis_state) = &state.redis {
-        redis = Some((
-            redis_state.client.get().await?,
-            &redis_state.key
-        ));
-
-        let (conn, key) = redis.as_mut().unwrap();
-        conn.get::<'_, _, Option<String>>(&*cache_hash.unwrap()).await?
-            .map(|enc| key.decrypt(&enc))
+        let mut conn = redis_state.client.get().await?;
+        let cached_audio = conn.get::<'_, _, Option<String>>(&*cache_hash).await?
+            .map(|enc| redis_state.key.decrypt(&enc))
             .transpose()?
-            .map(bytes::Bytes::from)
+            .map(bytes::Bytes::from);
+
+        if let Some(cached_audio) = cached_audio {
+            #[cfg(any(feature="gtts", feature="espeak"))]
+            mode.check_length(&cached_audio, max_length)?;
+
+            tracing::debug!("Used cached TTS for {cache_key}");
+            return Ok(mode.into_response(cached_audio));
+        }
+
+        Some((conn, &redis_state.key, cache_hash))
     } else {
         None
     };
 
-    let data: bytes::Bytes = match cached_audio {
-        Some(cached_audio) => {
-            tracing::debug!("Used cached TTS for {cache_key}");
-            cached_audio
-        }
-        None => {
-            let data = match mode {
-                #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &lang, max_length).await?,
-                #[cfg(feature="espeak")] TTSMode::eSpeak => {
-                    bytes::Bytes::from(espeak::get_tts(&text, &lang, max_length.map(|l| l as u32), speaking_rate as u16).await?)
-                },
-                #[cfg(feature="premium")] TTSMode::Premium => {
-                    bytes::Bytes::from(premium::get_tts(&state.premium, &text, &lang, speaking_rate).await?)
-                }
-            };
-
-            tracing::debug!("Generated TTS from {cache_key}");
-            if let Some((mut redis_conn, key)) = redis {
-                if let Err(err) = redis_conn.set::<'_, _, _, ()>(&*cache_hash.unwrap(), key.encrypt(&data)).await {
-                    tracing::error!("Failed to cache: {err}");
-                } else {
-                    tracing::debug!("Cached TTS from {cache_key}");
-                };
-            };
-
-            data
-        }
+    let audio = match mode {
+        #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &voice).await?,
+        #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_tts(&text, &voice, speaking_rate as u16).await?,
+        #[cfg(feature="premium")] TTSMode::Premium => premium::get_tts(&state.premium, &text, &voice, speaking_rate).await?,
     };
 
-    Ok(
-        axum::response::Response::builder()
-            .header("Content-Type", match mode {
-                #[cfg(feature="gtts")] TTSMode::gTTS => "audio/mpeg",
-                #[cfg(feature="espeak")] TTSMode::eSpeak => "audio/wav",
-                #[cfg(feature="premium")] TTSMode::Premium => "audio/opus"
-            })
-            .body(axum::body::Full::new(data))?
-    )
+    tracing::debug!("Generated TTS from {cache_key}");
+    if let Some((mut redis_conn, key, cache_hash)) = redis_info {
+        if let Err(err) = redis_conn.set::<'_, _, _, ()>(&*cache_hash, key.encrypt(&audio)).await {
+            tracing::error!("Failed to cache: {err}");
+        } else {
+            tracing::debug!("Cached TTS from {cache_key}");
+        };
+    };
+
+    #[cfg(any(feature="gtts", feature="espeak"))]
+    mode.check_length(&audio, max_length)?;
+    Ok(mode.into_response(audio))
 }
 
 
@@ -136,8 +116,33 @@ enum TTSMode {
     #[cfg(feature="premium")] Premium,
 }
 
-#[cfg(any(feature="premium", feature="espeak"))]
 impl TTSMode {
+    fn into_response(self, data: bytes::Bytes) -> impl axum::response::IntoResponse {
+        axum::response::Response::builder()
+            .header("Content-Type", match self {
+                #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
+                #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
+                #[cfg(feature="premium")] Self::Premium => "audio/opus"
+            })
+            .body(axum::body::Full::new(data))
+            .unwrap()
+    }
+
+    #[cfg(any(feature="gtts", feature="espeak"))]
+    #[allow(unused_variables)]
+    fn check_length(self, audio: &[u8], max_length: Option<u64>) -> Result<()> {
+        if !max_length.map_or(true, |max_length| match self {
+            #[cfg(feature="gtts")]    Self::gTTS    => gtts::check_length(audio, max_length),
+            #[cfg(feature="espeak")]  Self::eSpeak  => espeak::check_length(audio, max_length as u32),
+            #[cfg(feature="premium")] Self::Premium => true,
+        }) {
+            anyhow::bail!("TTS audio is too long!")
+        }
+
+        Ok(())
+    }
+
+    #[cfg(any(feature="premium", feature="espeak"))]
     fn check_speaking_rate(self, speaking_rate: f32) -> Result<()> {
         if let Some(max) = self.max_speaking_rate() {
             if speaking_rate > max {
@@ -149,6 +154,7 @@ impl TTSMode {
     }
 
     #[allow(clippy::unnecessary_wraps)]
+    #[cfg(any(feature="premium", feature="espeak"))]
     fn max_speaking_rate(self) -> Option<f32> {
         match self {
             #[cfg(feature="gtts")]    Self::gTTS    => None,

@@ -24,6 +24,12 @@ impl State {
 }
 
 
+#[derive(serde::Deserialize)]
+struct AudioResponse<'a> {
+    #[serde(borrow, rename="audioContent")]
+    audio_content: &'a str,
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct ServiceAccount {
     pub private_key: String,
@@ -87,7 +93,7 @@ fn generate_jwt(service_account: &ServiceAccount, expire_time: &std::time::Syste
     }
 }
 
-pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rate: f32) -> Result<Vec<u8>> {
+pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rate: f32) -> Result<bytes::Bytes> {
     let State{jwt_token, expire_time, reqwest, service_account} = state.read().await.clone();
 
     let jwt_token = {
@@ -109,19 +115,9 @@ pub(crate) async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speak
         .json(&generate_google_json(text, lang, speaking_rate)?)
         .send().await?.error_for_status()?;
 
-    let audio = {
-        #[derive(serde::Deserialize)]
-        struct AudioResponse<'a> {
-            #[serde(borrow, rename="audioContent")]
-            audio_content: &'a str,
-        }
-
-        let resp_raw = resp.bytes().await?;
-        let audio_response: AudioResponse = serde_json::from_slice(&resp_raw)?;
-        base64::decode(audio_response.audio_content)?
-    };
-
-    Ok(audio)
+    let resp_raw = resp.bytes().await?;
+    let audio_response: AudioResponse = serde_json::from_slice(&resp_raw)?;
+    Ok(bytes::Bytes::from(base64::decode(audio_response.audio_content)?))
 }
 
 pub(crate) fn get_voices() -> Vec<String> {

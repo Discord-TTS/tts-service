@@ -2,8 +2,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::Result;
 
-
-pub(crate) async fn get_tts(text: &str, voice: &str, max_length: Option<u32>, speaking_rate: u16) -> Result<Vec<u8>> {
+pub(crate) async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<bytes::Bytes> {
     if !VOICES.iter().any(|s| s.as_str() == voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
@@ -46,29 +45,25 @@ pub(crate) async fn get_tts(text: &str, voice: &str, max_length: Option<u32>, sp
         break output.stdout
     };
 
+    // Fix the wav header to set the ChunkSize and SubChunk2Size
     // See:
     // - https://github.com/hadware/voxpopuli/blob/fb94a6130c046bb9f7a27aaaed2a4b434666faa9/voxpopuli/main.py#L150-L158
     // - http://soundfile.sapp.org/doc/WaveFormat/
     let wav_len: u32 = raw_wav.len().try_into().expect("WAV data too long!");
 
-    if let Some(max_length) = max_length {
-        let wav_duration = wav_len / (
-            u16::from_le_bytes(raw_wav[22..24].try_into().unwrap()) as u32 * // Sample Rate
-            u32::from_le_bytes(raw_wav[24..28].try_into().unwrap()) *        // Number of Channels
-            u16::from_le_bytes(raw_wav[34..36].try_into().unwrap()) as u32   // Bits per Sample
-            / 8
-        );
-
-        if wav_duration > max_length {
-            anyhow::bail!("Audio is too long");
-        }
-    }
-
-    // Fix the wav header to set the ChunkSize and SubChunk2Size
     raw_wav[4..8].copy_from_slice(&(wav_len - 8).to_le_bytes());
     raw_wav[40..44].copy_from_slice(&(wav_len - 44).to_le_bytes());
 
-    Ok(raw_wav)
+    Ok(bytes::Bytes::from(raw_wav))
+}
+
+pub(crate) fn check_length(audio: &[u8], max_length: u32) -> bool {
+    audio.len() as u32 / (
+        u16::from_le_bytes(audio[22..24].try_into().unwrap()) as u32 * // Sample Rate
+        u32::from_le_bytes(audio[24..28].try_into().unwrap()) *        // Number of Channels
+        u16::from_le_bytes(audio[34..36].try_into().unwrap()) as u32   // Bits per Sample
+        / 8
+    ) > max_length
 }
 
 static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
