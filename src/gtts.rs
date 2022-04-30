@@ -1,4 +1,5 @@
 use bytes::Buf;
+use itertools::Itertools;
 use rand::Rng;
 use tokio::sync::RwLock;
 
@@ -64,26 +65,32 @@ async fn get_random_ipv6() -> Result<(std::net::IpAddr, reqwest::Client)> {
 
 
 pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<bytes::Bytes> {
-    loop {
-        let (ip, result) = {
-            let State{ip, http} = state.read().await.clone();
-            (ip, http.get(parse_url(text, voice)).send().await)
-        };
+    let mut audio = Vec::new();
 
-        match result {
-            Ok(resp) if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS => break Ok(resp.bytes().await?),
-            Err(err) if !err.is_timeout() => break Err(err.into()),
-            _ => {
-                // Generate a new client, with an new IP, and try again
-                tracing::warn!("IP {} has been blocked!", ip);
+    let chunks: Vec<String> = text.chars().chunks(200).into_iter().map(Iterator::collect).collect();
+    for chunk in chunks {
+        loop {
+            let (ip, result) = {
+                let State{ip, http} = state.read().await.clone();
+                (ip, http.get(parse_url(&chunk, voice)).send().await)
+            };
 
-                let (new_ip, new_http) = get_random_ipv6().await?;
-                let mut state = state.write().await;
-                state.http = new_http;
-                state.ip = new_ip;
+            match result {
+                Ok(resp) if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS => break audio.extend(resp.bytes().await?),
+                Err(err) if !err.is_timeout() => return Err(err.into()),
+                _ => {
+                    // Generate a new client, with an new IP, and try again
+                    tracing::warn!("IP {} has been blocked!", ip);
+
+                    let (new_ip, new_http) = get_random_ipv6().await?;
+                    let mut state = state.write().await;
+                    state.http = new_http;
+                    state.ip = new_ip;
+                }
             }
         }
     }
+    Ok(bytes::Bytes::from(audio))
 }
 
 pub fn check_voice(voice: &str) -> bool {

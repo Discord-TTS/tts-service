@@ -71,9 +71,13 @@ optional = true
 version = "0.1"
 optional = true
 
+[dependencies.itertools]
+version = "0.10"
+optional = true
+
 [features]
+gtts = ["rand", "reqwest", "ipgen", "mp3-duration", "itertools"]
 premium = ["reqwest", "reqwest/json", "jsonwebtoken", "base64"]
 espeak = ["tokio/process", "tokio/io-util", "espeakng"]
-gtts = ["rand", "reqwest", "ipgen", "mp3-duration"]
 
 default = ["espeak"]
