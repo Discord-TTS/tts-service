@@ -4,8 +4,9 @@
 #[cfg(not(any(feature="gtts", feature="espeak", feature="premium")))] 
 compile_error!("Either feature `gtts`, `espeak`, or `premium` must be enabled!");
 
-use std::{str::FromStr, sync::Arc, fmt::Display, borrow::Cow};
+use std::{str::FromStr, fmt::Display, borrow::Cow};
 
+use once_cell::sync::OnceCell;
 use sha2::Digest;
 use redis::AsyncCommands;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -44,7 +45,6 @@ struct GetTTS {
 }
 
 async fn get_tts(
-    state: Arc<State>,
     axum::extract::Query(payload): axum::extract::Query<GetTTS>
 ) -> ResponseResult<impl axum::response::IntoResponse> {
     cfg_if::cfg_if!(
@@ -62,6 +62,7 @@ async fn get_tts(
     let cache_key = format!("{text} | {voice} | {mode} | {speaking_rate}");
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
+    let state = STATE.get().unwrap();
     let redis_info = if let Some(redis_state) = &state.redis {
         let cache_hash = {
             let mut hasher = sha2::Sha256::new();
@@ -199,6 +200,7 @@ struct State {
     #[cfg(feature="premium")] premium: tokio::sync::RwLock<premium::State>
 }
 
+static STATE: OnceCell<State> = OnceCell::new();
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -215,10 +217,11 @@ async fn main() -> Result<()> {
         espeakng::initialise(None)?;
     }
 
-    let state = Arc::new(State {
+    let redis_uri = std::env::var("REDIS_URI").ok();
+    let result = STATE.set(State {
         #[cfg(feature="gtts")] gtts: gtts::State::new().await?,
         #[cfg(feature="premium")] premium: premium::State::new()?,
-        redis: std::env::var("REDIS_URI").ok().map(|uri| {
+        redis: redis_uri.as_ref().map(|uri| {
             let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
             RedisCache {
                 client: deadpool_redis::Config::from_url(uri).create_pool(Some(deadpool_redis::Runtime::Tokio1)).unwrap(),
@@ -226,12 +229,10 @@ async fn main() -> Result<()> {
             }
         }),
     });
+    if result.is_err() {unreachable!()}
 
     let app = axum::Router::new()
-        .route("/tts", axum::routing::get({
-            let shared_state = Arc::clone(&state);
-            move |q| get_tts(Arc::clone(&shared_state), q)
-        }))
+        .route("/tts", axum::routing::get(get_tts))
         .route("/voices", axum::routing::get(get_voices))
         .route("/modes", axum::routing::get(|| async {
             axum::Json([
@@ -246,7 +247,7 @@ async fn main() -> Result<()> {
         Cow::Owned
     ).parse()?;
 
-    tracing::info!("Binding to {bind_to} {} redis enabled!", if state.redis.is_some() {"with"} else {"without"});
+    tracing::info!("Binding to {bind_to} {} redis enabled!", if redis_uri.is_some() {"with"} else {"without"});
     axum::Server::bind(&bind_to)
         .serve(app.into_make_service())
         .with_graceful_shutdown(async {drop(tokio::signal::ctrl_c().await)})
@@ -298,14 +299,13 @@ impl axum::response::IntoResponse for Error {
             },
         });
 
-        axum::response::Response::builder()
-            .status(match self {
-                #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 400,
-                #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => 400,
-                Self::UnknownVoice(_) => 400,
-                Self::Unknown(_) => 500,
-            })
-            .body(axum::body::boxed(axum::body::Full::from(json_err.to_string())))
-            .unwrap()
+        let status = match self {
+            #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => axum::http::StatusCode::BAD_REQUEST,
+            #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => axum::http::StatusCode::BAD_REQUEST,
+            Self::Unknown(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Self::UnknownVoice(_) => axum::http::StatusCode::BAD_REQUEST,
+        };
+
+        (status, axum::Json(json_err)).into_response()
     }
 }
