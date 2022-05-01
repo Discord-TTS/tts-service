@@ -63,7 +63,7 @@ pub fn check_length(audio: &[u8], max_length: u32) -> bool {
         u32::from_le_bytes(audio[24..28].try_into().unwrap()) *        // Number of Channels
         u16::from_le_bytes(audio[34..36].try_into().unwrap()) as u32   // Bits per Sample
         / 8
-    ) > max_length
+    ) < max_length
 }
 
 
