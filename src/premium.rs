@@ -38,7 +38,7 @@ pub struct ServiceAccount {
 
 #[cfg(feature="premium")]
 #[allow(non_snake_case)]
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct GoogleVoice<'a> {
     pub name: String,
     pub ssmlGender: &'a str,
@@ -120,15 +120,17 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rat
     Ok(bytes::Bytes::from(base64::decode(audio_response.audio_content)?))
 }
 
+static RAW_VOICES: once_cell::sync::Lazy<Vec<GoogleVoice<'static>>> = once_cell::sync::Lazy::new(|| {
+    serde_json::from_str(include_str!("data/voices-premium.json")).unwrap()
+});
 
 static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
-    let raw_map: Vec<GoogleVoice<'_>> = serde_json::from_str(include_str!("data/voices-premium.json")).unwrap();
-    raw_map.into_iter().filter_map(|gvoice|  {
+    RAW_VOICES.iter().filter_map(|gvoice|  {
         let mode_variant: String = gvoice.name.split_inclusive('-').skip(2).collect();
         let (mode, variant) = mode_variant.split_once('-').unwrap();
 
         (mode == "Standard").then(|| {
-            let [language] = gvoice.languageCodes;
+            let [language] = &gvoice.languageCodes;
             format!("{language} {variant}")
         })
     }).collect()
@@ -139,5 +141,9 @@ pub fn check_voice(voice: &str) -> bool {
 }
 
 pub fn get_voices() -> Vec<String> {
-    VOICES.iter().cloned().collect()
+    VOICES.clone()
+}
+
+pub fn get_raw_voices() -> Vec<GoogleVoice<'static>> {
+    RAW_VOICES.clone()
 }

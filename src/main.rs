@@ -21,18 +21,31 @@ type ResponseResult<T> = std::result::Result<T, Error>;
 #[derive(serde::Deserialize)]
 struct GetVoices {
     mode: TTSMode,
+    #[serde(default)]
+    #[cfg(feature="premium")]
+    raw: bool,
 }
 
 async fn get_voices(
     axum::extract::Query(payload): axum::extract::Query<GetVoices>
 ) -> ResponseResult<impl axum::response::IntoResponse> {
-    let GetVoices{mode} = payload;
+    cfg_if::cfg_if!(
+        if #[cfg(feature="premium")] {
+            let GetVoices{mode, raw} = payload;
+        } else {
+            let GetVoices{mode} = payload;
+        }
+    );
 
     Ok(axum::Json(match mode {
-        #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_voices(),
-        #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices(),
-        #[cfg(feature="premium")] TTSMode::Premium => premium::get_voices(),
-    }))
+        #[cfg(feature="gtts")] TTSMode::gTTS => serde_json::to_value(gtts::get_voices()),
+        #[cfg(feature="espeak")] TTSMode::eSpeak => serde_json::to_value(espeak::get_voices()),
+        #[cfg(feature="premium")] TTSMode::Premium => if raw {
+            serde_json::to_value(premium::get_voices())
+        } else {
+            serde_json::to_value(premium::get_raw_voices())
+        },
+    }?))
 }
 
 #[derive(serde::Deserialize)]

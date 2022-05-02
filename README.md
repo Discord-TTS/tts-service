@@ -9,7 +9,7 @@ HTTP microservice using Axum to generate TTS from an HTTP reqwest.
 
 ## Supported endpoints:
 - `GET /tts?text={CONTENT}&lang={VOICE}&mode={MODE}&speaking_rate={SPEAKING_RATE}&max_length={MAX_LENGTH}` - Returns the audio generated.
-- `GET /voices?mode={MODE}` - Returns the supported voices for the given mode as a JSON array of strings.
+- `GET /voices?mode={MODE}&raw={BOOL}` - Returns the supported voices for the given mode as either a JSON array of strings, or a raw format from the source with the `raw` set to true.
 - `GET /modes` - Returns the currently supported modes for TTS as a JSON array of strings.
 
 ## Error Codes:

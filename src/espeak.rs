@@ -87,6 +87,7 @@ static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|
             }
         };
 
+        files.sort();
         Ok(files)
     }().unwrap()
 });
