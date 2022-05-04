@@ -23,7 +23,7 @@ type ResponseResult<T> = std::result::Result<T, Error>;
 struct GetVoices {
     mode: TTSMode,
     #[serde(default)]
-    #[cfg(feature="premium")]
+    #[cfg(any(feature="gtts", feature="premium"))]
     raw: bool,
 }
 
@@ -31,7 +31,7 @@ async fn get_voices(
     axum::extract::Query(payload): axum::extract::Query<GetVoices>
 ) -> ResponseResult<impl axum::response::IntoResponse> {
     cfg_if::cfg_if!(
-        if #[cfg(feature="premium")] {
+        if #[cfg(any(feature="gtts", feature="premium"))]{
             let GetVoices{mode, raw} = payload;
         } else {
             let GetVoices{mode} = payload;
