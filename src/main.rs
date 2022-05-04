@@ -9,6 +9,7 @@ use std::{str::FromStr, fmt::Display, borrow::Cow};
 use once_cell::sync::OnceCell;
 use sha2::Digest;
 use redis::AsyncCommands;
+use serde_json::to_value;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature="gtts")] mod gtts;
@@ -38,12 +39,16 @@ async fn get_voices(
     );
 
     Ok(axum::Json(match mode {
-        #[cfg(feature="gtts")] TTSMode::gTTS => serde_json::to_value(gtts::get_voices()),
-        #[cfg(feature="espeak")] TTSMode::eSpeak => serde_json::to_value(espeak::get_voices()),
-        #[cfg(feature="premium")] TTSMode::Premium => if raw {
-            serde_json::to_value(premium::get_voices())
+        #[cfg(feature="espeak")] TTSMode::eSpeak => to_value(espeak::get_voices()),
+        #[cfg(feature="gtts")] TTSMode::gTTS => if raw {
+            to_value(gtts::get_raw_voices())
         } else {
-            serde_json::to_value(premium::get_raw_voices())
+            to_value(gtts::get_voices())
+        },
+        #[cfg(feature="premium")] TTSMode::Premium => if raw {
+            to_value(premium::get_raw_voices())
+        } else {
+            to_value(premium::get_voices())
         },
     }?))
 }

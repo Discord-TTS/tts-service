@@ -101,6 +101,11 @@ pub fn check_length(audio: &[u8], max_length: u64) -> bool {
     mp3_duration::from_read(&mut audio.reader()).unwrap().as_secs() < max_length
 }
 
+
 pub fn get_voices() -> Vec<String> {
+    get_raw_voices().into_iter().map(|(k, _)| k).collect()
+}
+
+pub fn get_raw_voices() -> std::collections::BTreeMap<String, String> {
     serde_json::from_str(include_str!("data/voices-gtts.json")).unwrap()
 }
