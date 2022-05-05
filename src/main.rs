@@ -237,7 +237,7 @@ async fn main() -> Result<()> {
 
     let redis_uri = std::env::var("REDIS_URI").ok();
     let result = STATE.set(State {
-        #[cfg(feature="gtts")] gtts: gtts::State::new().await?,
+        #[cfg(feature="gtts")] gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6().await?),
         #[cfg(feature="premium")] premium: premium::State::new()?,
         redis: redis_uri.as_ref().map(|uri| {
             let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
