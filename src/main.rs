@@ -63,8 +63,16 @@ struct GetTTS {
 }
 
 async fn get_tts(
-    axum::extract::Query(payload): axum::extract::Query<GetTTS>
+    axum::extract::Query(payload): axum::extract::Query<GetTTS>,
+    headers: axum::http::HeaderMap,
 ) -> ResponseResult<impl axum::response::IntoResponse> {
+    let state = STATE.get().unwrap();
+    if let Some(auth_key) = state.auth_key.as_deref() {
+        if headers.get("Authorization").map(axum::http::header::HeaderValue::to_str).transpose()? != Some(auth_key) {
+            return Err(Error::Unauthorized);
+        }
+    }
+
     cfg_if::cfg_if!(
         if #[cfg(any(feature="gtts", feature="espeak"))] {
             let GetTTS{text, voice, mode, speaking_rate, max_length} = payload;
@@ -80,7 +88,6 @@ async fn get_tts(
     let cache_key = format!("{text} | {voice} | {mode} | {speaking_rate}");
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
-    let state = STATE.get().unwrap();
     let redis_info = if let Some(redis_state) = &state.redis {
         let cache_hash = {
             let mut hasher = sha2::Sha256::new();
@@ -213,6 +220,7 @@ struct RedisCache {
 }
 
 struct State {
+    auth_key: Option<String>,
     redis: Option<RedisCache>,
     #[cfg(feature="gtts")] gtts: tokio::sync::RwLock<gtts::State>,
     #[cfg(feature="premium")] premium: tokio::sync::RwLock<premium::State>
@@ -239,6 +247,8 @@ async fn main() -> Result<()> {
     let result = STATE.set(State {
         #[cfg(feature="gtts")] gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6().await?),
         #[cfg(feature="premium")] premium: premium::State::new()?,
+
+        auth_key: std::env::var("AUTH_KEY").ok(),
         redis: redis_uri.as_ref().map(|uri| {
             let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
             RedisCache {
@@ -277,6 +287,7 @@ async fn main() -> Result<()> {
 
 #[derive(Debug)]
 enum Error {
+    Unauthorized,
     UnknownVoice(String),
     #[cfg(any(feature="gtts", feature="espeak"))] AudioTooLong,
     #[cfg(any(feature="premium", feature="espeak"))] InvalidSpeakingRate(f32),
@@ -296,6 +307,7 @@ impl std::fmt::Display for Error {
             #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(rate) => write!(f, "Invalid speaking rate: {rate}"),
             #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => f.write_str("Max length exceeded!"),
             Self::UnknownVoice(voice) => write!(f, "Unknown voice: {voice}"),
+            Self::Unauthorized => write!(f, "Unauthorized request"),
             Self::Unknown(e) => write!(f, "Unknown error: {e}"),
         }
     }
@@ -310,6 +322,7 @@ impl axum::response::IntoResponse for Error {
         let json_err = serde_json::json!({
             "display": self.to_string(),
             "code": match self {
+                Self::Unauthorized => 4,
                 #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 3_u8,
                 #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => 2,
                 Self::UnknownVoice(_) => 1,
@@ -322,6 +335,7 @@ impl axum::response::IntoResponse for Error {
             #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => axum::http::StatusCode::BAD_REQUEST,
             Self::Unknown(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Self::UnknownVoice(_) => axum::http::StatusCode::BAD_REQUEST,
+            Self::Unauthorized => axum::http::StatusCode::FORBIDDEN,
         };
 
         (status, axum::Json(json_err)).into_response()

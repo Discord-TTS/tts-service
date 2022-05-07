@@ -20,10 +20,13 @@ Non-200 responses will return a JSON object with the following keys:
 - `1` - Unknown voice
 - `2` - Max length exceeded
 - `3` - Speaking rate exceeded limits, see the `display` for more information
+- `4` - `AUTH_KEY` has been set and the `Authorization` header doesn't match the key.
 ### `display` - str
 A human readable message describing the error
 
 ## Environment Variables (default)
+- `AUTH_KEY` - If set, this key must be sent in the `Authorization` header of each request
+
 - `IPV6_BLOCK` - A block of IPv6 addresses, randomly selected for each gTTS request
 
 - `GOOGLE_APPLICATION_CREDENTIALS` - The file path to the gCloud JSON
