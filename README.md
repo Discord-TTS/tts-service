@@ -5,7 +5,7 @@ HTTP microservice using Axum to generate TTS from an HTTP reqwest.
 ## Modes
 - eSpeak - Local TTS, low quality. Returns WAV audio.
 - gTTS - Cloud TTS, medium quality. Returns MP3 audio
-- Premium - Cloud TTS, high quality. Returns OPUS audio. **Requires a gCloud API key**
+- gcloud - Google Cloud TTS, high quality. Returns OPUS audio. **Requires a gCloud API key**
 
 ## Supported endpoints:
 - `GET /tts?text={CONTENT}&lang={VOICE}&mode={MODE}&speaking_rate={SPEAKING_RATE}&max_length={MAX_LENGTH}` - Returns the audio generated.

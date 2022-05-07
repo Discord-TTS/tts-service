@@ -36,7 +36,7 @@ pub struct ServiceAccount {
     pub client_email: String,
 }
 
-#[cfg(feature="premium")]
+#[cfg(feature="gcloud")]
 #[allow(non_snake_case)]
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct GoogleVoice<'a> {
@@ -121,7 +121,7 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, lang: &str, speaking_rat
 }
 
 static RAW_VOICES: once_cell::sync::Lazy<Vec<GoogleVoice<'static>>> = once_cell::sync::Lazy::new(|| {
-    serde_json::from_str(include_str!("data/voices-premium.json")).unwrap()
+    serde_json::from_str(include_str!("data/voices-gcloud.json")).unwrap()
 });
 
 static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {

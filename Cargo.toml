@@ -77,7 +77,7 @@ optional = true
 
 [features]
 gtts = ["rand", "reqwest", "ipgen", "mp3-duration", "itertools"]
-premium = ["reqwest", "reqwest/json", "jsonwebtoken", "base64"]
+gcloud = ["reqwest", "reqwest/json", "jsonwebtoken", "base64"]
 espeak = ["tokio/process", "tokio/io-util", "espeakng"]
 
 default = ["espeak"]

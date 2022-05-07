@@ -1,8 +1,8 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::unused_async, clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_lossless)]
 
-#[cfg(not(any(feature="gtts", feature="espeak", feature="premium")))] 
-compile_error!("Either feature `gtts`, `espeak`, or `premium` must be enabled!");
+#[cfg(not(any(feature="gtts", feature="espeak", feature="gcloud")))]
+compile_error!("Either feature `gtts`, `espeak`, or `gcloud` must be enabled!");
 
 use std::{str::FromStr, fmt::Display, borrow::Cow};
 
@@ -14,7 +14,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature="gtts")] mod gtts;
 #[cfg(feature="espeak")] mod espeak;
-#[cfg(feature="premium")] mod premium;
+#[cfg(feature="gcloud")] mod gcloud;
 
 type Result<T> = std::result::Result<T, anyhow::Error>;
 type ResponseResult<T> = std::result::Result<T, Error>;
@@ -23,7 +23,7 @@ type ResponseResult<T> = std::result::Result<T, Error>;
 struct GetVoices {
     mode: TTSMode,
     #[serde(default)]
-    #[cfg(any(feature="gtts", feature="premium"))]
+    #[cfg(any(feature="gtts", feature="gcloud"))]
     raw: bool,
 }
 
@@ -31,7 +31,7 @@ async fn get_voices(
     axum::extract::Query(payload): axum::extract::Query<GetVoices>
 ) -> ResponseResult<impl axum::response::IntoResponse> {
     cfg_if::cfg_if!(
-        if #[cfg(any(feature="gtts", feature="premium"))]{
+        if #[cfg(any(feature="gtts", feature="gcloud"))]{
             let GetVoices{mode, raw} = payload;
         } else {
             let GetVoices{mode} = payload;
@@ -45,10 +45,10 @@ async fn get_voices(
         } else {
             to_value(gtts::get_voices())
         },
-        #[cfg(feature="premium")] TTSMode::Premium => if raw {
-            to_value(premium::get_raw_voices())
+        #[cfg(feature="gcloud")] TTSMode::gCloud => if raw {
+            to_value(gcloud::get_raw_voices())
         } else {
-            to_value(premium::get_voices())
+            to_value(gcloud::get_voices())
         },
     }?))
 }
@@ -81,7 +81,7 @@ async fn get_tts(
         }
     );
 
-    #[cfg(any(feature="premium", feature="espeak"))]
+    #[cfg(any(feature="gcloud", feature="espeak"))]
     mode.check_speaking_rate(speaking_rate)?;
     mode.check_voice(&voice)?;
 
@@ -117,7 +117,7 @@ async fn get_tts(
     let audio = match mode {
         #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &voice).await?,
         #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_tts(&text, &voice, speaking_rate as u16).await?,
-        #[cfg(feature="premium")] TTSMode::Premium => premium::get_tts(&state.premium, &text, &voice, speaking_rate).await?,
+        #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_tts(&state.gcloud, &text, &voice, speaking_rate).await?,
     };
 
     tracing::debug!("Generated TTS from {cache_key}");
@@ -140,7 +140,7 @@ async fn get_tts(
 enum TTSMode {
     #[cfg(feature="gtts")] gTTS,
     #[cfg(feature="espeak")] eSpeak,
-    #[cfg(feature="premium")] Premium,
+    #[cfg(feature="gcloud")] gCloud,
 }
 
 impl TTSMode {
@@ -149,7 +149,7 @@ impl TTSMode {
             .header("Content-Type", match self {
                 #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
                 #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
-                #[cfg(feature="premium")] Self::Premium => "audio/opus"
+                #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus"
             })
             .body(axum::body::Full::new(data))
             .unwrap()
@@ -159,7 +159,7 @@ impl TTSMode {
         if match self {
             #[cfg(feature="gtts")] Self::gTTS => gtts::check_voice(voice),
             #[cfg(feature="espeak")] Self::eSpeak => espeak::check_voice(voice),
-            #[cfg(feature="premium")] Self::Premium => premium::check_voice(voice),
+            #[cfg(feature="gcloud")] Self::gCloud => gcloud::check_voice(voice),
         } {
             Ok(())
         } else {
@@ -173,7 +173,7 @@ impl TTSMode {
         if max_length.map_or(true, |max_length| match self {
             #[cfg(feature="gtts")]    Self::gTTS    => gtts::check_length(audio, max_length),
             #[cfg(feature="espeak")]  Self::eSpeak  => espeak::check_length(audio, max_length as u32),
-            #[cfg(feature="premium")] Self::Premium => true,
+            #[cfg(feature="gcloud")]  Self::gCloud => true,
         }) {
             Ok(())
         } else {
@@ -181,7 +181,7 @@ impl TTSMode {
         }
     }
 
-    #[cfg(any(feature="premium", feature="espeak"))]
+    #[cfg(any(feature="gcloud", feature="espeak"))]
     fn check_speaking_rate(self, speaking_rate: f32) -> ResponseResult<()> {
         if let Some(max) = self.max_speaking_rate() {
             if speaking_rate > max {
@@ -193,12 +193,12 @@ impl TTSMode {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    #[cfg(any(feature="premium", feature="espeak"))]
+    #[cfg(any(feature="gcloud", feature="espeak"))]
     const fn max_speaking_rate(self) -> Option<f32> {
         match self {
             #[cfg(feature="gtts")]    Self::gTTS    => None,
             #[cfg(feature="espeak")]  Self::eSpeak  => Some(400.0),
-            #[cfg(feature="premium")] Self::Premium => Some(4.0),
+            #[cfg(feature="gcloud")]  Self::gCloud  => Some(4.0),
         }
     }
 }
@@ -208,7 +208,7 @@ impl Display for TTSMode {
         f.write_str(match self {
             #[cfg(feature="gtts")] Self::gTTS => "gTTS",
             #[cfg(feature="espeak")] Self::eSpeak => "eSpeak",
-            #[cfg(feature="premium")] Self::Premium => "Premium"
+            #[cfg(feature="gcloud")] Self::gCloud => "gCloud"
         })
     }
 }
@@ -223,7 +223,7 @@ struct State {
     auth_key: Option<String>,
     redis: Option<RedisCache>,
     #[cfg(feature="gtts")] gtts: tokio::sync::RwLock<gtts::State>,
-    #[cfg(feature="premium")] premium: tokio::sync::RwLock<premium::State>
+    #[cfg(feature="gcloud")] gcloud: tokio::sync::RwLock<gcloud::State>
 }
 
 static STATE: OnceCell<State> = OnceCell::new();
@@ -246,7 +246,7 @@ async fn main() -> Result<()> {
     let redis_uri = std::env::var("REDIS_URI").ok();
     let result = STATE.set(State {
         #[cfg(feature="gtts")] gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6().await?),
-        #[cfg(feature="premium")] premium: premium::State::new()?,
+        #[cfg(feature="gcloud")] gcloud: gcloud::State::new()?,
 
         auth_key: std::env::var("AUTH_KEY").ok(),
         redis: redis_uri.as_ref().map(|uri| {
@@ -264,9 +264,9 @@ async fn main() -> Result<()> {
         .route("/voices", axum::routing::get(get_voices))
         .route("/modes", axum::routing::get(|| async {
             axum::Json([
-                #[cfg(feature="gtts")] "gTTS",
-                #[cfg(feature="espeak")] "eSpeak",
-                #[cfg(feature="premium")] "Premium",
+                #[cfg(feature="gtts")] TTSMode::gTTS.to_string(),
+                #[cfg(feature="espeak")] TTSMode::eSpeak.to_string(),
+                #[cfg(feature="gcloud")] TTSMode::gCloud.to_string(),
             ])
         }));
 
@@ -290,7 +290,7 @@ enum Error {
     Unauthorized,
     UnknownVoice(String),
     #[cfg(any(feature="gtts", feature="espeak"))] AudioTooLong,
-    #[cfg(any(feature="premium", feature="espeak"))] InvalidSpeakingRate(f32),
+    #[cfg(any(feature="gcloud", feature="espeak"))] InvalidSpeakingRate(f32),
 
     Unknown(anyhow::Error),
 }
@@ -304,7 +304,7 @@ impl<E: Into<anyhow::Error>> From<E> for Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(rate) => write!(f, "Invalid speaking rate: {rate}"),
+            #[cfg(any(feature="gcloud", feature="espeak"))] Self::InvalidSpeakingRate(rate) => write!(f, "Invalid speaking rate: {rate}"),
             #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => f.write_str("Max length exceeded!"),
             Self::UnknownVoice(voice) => write!(f, "Unknown voice: {voice}"),
             Self::Unauthorized => write!(f, "Unauthorized request"),
@@ -323,7 +323,7 @@ impl axum::response::IntoResponse for Error {
             "display": self.to_string(),
             "code": match self {
                 Self::Unauthorized => 4,
-                #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => 3_u8,
+                #[cfg(any(feature="gcloud", feature="espeak"))] Self::InvalidSpeakingRate(_) => 3_u8,
                 #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => 2,
                 Self::UnknownVoice(_) => 1,
                 Self::Unknown(_) => 0,
@@ -331,7 +331,7 @@ impl axum::response::IntoResponse for Error {
         });
 
         let status = match self {
-            #[cfg(any(feature="premium", feature="espeak"))] Self::InvalidSpeakingRate(_) => axum::http::StatusCode::BAD_REQUEST,
+            #[cfg(any(feature="gcloud", feature="espeak"))] Self::InvalidSpeakingRate(_) => axum::http::StatusCode::BAD_REQUEST,
             #[cfg(any(feature="gtts", feature="espeak"))] Self::AudioTooLong => axum::http::StatusCode::BAD_REQUEST,
             Self::Unknown(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Self::UnknownVoice(_) => axum::http::StatusCode::BAD_REQUEST,
