@@ -6,6 +6,7 @@ HTTP microservice using Axum to generate TTS from an HTTP reqwest.
 - eSpeak - Local TTS, low quality. Returns WAV audio.
 - gTTS - Cloud TTS, medium quality. Returns MP3 audio
 - gcloud - Google Cloud TTS, high quality. Returns OPUS audio. **Requires a gCloud API key**
+- Polly - Amazon Polly TTS, high quality. Returns OggVorbis audio. **Requires Amazon Polly credentials**
 
 ## Supported endpoints:
 - `GET /tts?text={CONTENT}&lang={VOICE}&mode={MODE}&speaking_rate={SPEAKING_RATE}&max_length={MAX_LENGTH}` - Returns the audio generated.
@@ -25,19 +26,28 @@ Non-200 responses will return a JSON object with the following keys:
 A human readable message describing the error
 
 ## Environment Variables (default)
-- `AUTH_KEY` - If set, this key must be sent in the `Authorization` header of each request
-
-- `IPV6_BLOCK` - A block of IPv6 addresses, randomly selected for each gTTS request
-
-- `GOOGLE_APPLICATION_CREDENTIALS` - The file path to the gCloud JSON
-
 - `BIND_ADDR`(`0.0.0.0:3000`) - The address to bind the web server to
+
+- `LOG_LEVEL`(`INFO`) - The lowest log level to output to stdout
+
+- `AUTH_KEY` - If set, this key must be sent in the `Authorization` header of each request
 
 - `REDIS_URI` - The URI of a redis instance to cache requests with
 
 - `CACHE_KEY` - Fernet encryption key to use to encrypt audio data
 
-- `LOG_LEVEL`(`INFO`) - The lowest log level to output to stdout
+### gTTS Required
+- `IPV6_BLOCK` - A block of IPv6 addresses, randomly selected for each gTTS request
+
+### gCloud Required
+- `GOOGLE_APPLICATION_CREDENTIALS` - The file path to the gCloud JSON
+
+### Polly Required
+- `AWS_REGION` - The AWS region to use
+
+- `AWS_ACCESS_KEY_ID` - The AWS access key ID
+
+- `AWS_SECRET_ACCESS_KEY` - The AWS secret access key
 
 ## Docker build variables (default)
 - `MODES`(`espeak`) - A comma separated list of modes to support

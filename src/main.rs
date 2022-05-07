@@ -1,8 +1,8 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::unused_async, clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_lossless)]
 
-#[cfg(not(any(feature="gtts", feature="espeak", feature="gcloud")))]
-compile_error!("Either feature `gtts`, `espeak`, or `gcloud` must be enabled!");
+#[cfg(not(any(feature="gtts", feature="espeak", feature="gcloud", feature="polly")))]
+compile_error!("Either feature `gtts`, `espeak`, `gcloud`, or `polly` must be enabled!");
 
 use std::{str::FromStr, fmt::Display, borrow::Cow};
 
@@ -13,17 +13,18 @@ use serde_json::to_value;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature="gtts")] mod gtts;
+#[cfg(feature="polly")] mod polly;
 #[cfg(feature="espeak")] mod espeak;
 #[cfg(feature="gcloud")] mod gcloud;
 
-type Result<T> = std::result::Result<T, anyhow::Error>;
+type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
 
 #[derive(serde::Deserialize)]
 struct GetVoices {
     mode: TTSMode,
     #[serde(default)]
-    #[cfg(any(feature="gtts", feature="gcloud"))]
+    #[cfg(any(feature="gtts", feature="polly", feature="gcloud"))]
     raw: bool,
 }
 
@@ -31,34 +32,39 @@ async fn get_voices(
     axum::extract::Query(payload): axum::extract::Query<GetVoices>
 ) -> ResponseResult<impl axum::response::IntoResponse> {
     cfg_if::cfg_if!(
-        if #[cfg(any(feature="gtts", feature="gcloud"))]{
+        if #[cfg(any(feature="gtts", feature="polly", feature="gcloud"))]{
             let GetVoices{mode, raw} = payload;
         } else {
             let GetVoices{mode} = payload;
+            let raw = true;
         }
     );
 
-    Ok(axum::Json(match mode {
-        #[cfg(feature="espeak")] TTSMode::eSpeak => to_value(espeak::get_voices()),
-        #[cfg(feature="gtts")] TTSMode::gTTS => if raw {
-            to_value(gtts::get_raw_voices())
-        } else {
-            to_value(gtts::get_voices())
-        },
-        #[cfg(feature="gcloud")] TTSMode::gCloud => if raw {
-            to_value(gcloud::get_raw_voices())
-        } else {
-            to_value(gcloud::get_voices())
-        },
-    }?))
+    #[cfg(feature="polly")]
+    let state = STATE.get().unwrap();
+
+    Ok(axum::Json(
+        if raw {match mode {
+            #[cfg(feature="gtts")] TTSMode::gTTS => to_value(gtts::get_raw_voices()),
+            #[cfg(feature="gcloud")] TTSMode::gCloud => to_value(gcloud::get_raw_voices()),
+            #[cfg(feature="polly")] TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
+
+            #[cfg(feature="espeak")] TTSMode::eSpeak => to_value(espeak::get_voices()),
+        }?} else {to_value(match mode {
+            #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_voices(),
+            #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices(),
+            #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_voices(),
+            #[cfg(feature="polly")]  TTSMode::Polly  => polly::get_voices(&state.polly).await?,
+        })?},
+    ))
 }
 
 #[derive(serde::Deserialize)]
 struct GetTTS {
     text: String,
     mode: TTSMode,
-    #[serde(default)] speaking_rate: f32,
     #[serde(rename="lang")] voice: String,
+    #[serde(default)] speaking_rate: Option<f32>,
     #[cfg(any(feature="gtts", feature="espeak"))] max_length: Option<u64>,
 }
 
@@ -83,9 +89,9 @@ async fn get_tts(
 
     #[cfg(any(feature="gcloud", feature="espeak"))]
     mode.check_speaking_rate(speaking_rate)?;
-    mode.check_voice(&voice)?;
+    let voice = mode.check_voice(state, voice).await?;
 
-    let cache_key = format!("{text} | {voice} | {mode} | {speaking_rate}");
+    let cache_key = format!("{text} | {voice} | {mode} | {}", speaking_rate.unwrap_or(0.0));
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
     let redis_info = if let Some(redis_state) = &state.redis {
@@ -96,7 +102,7 @@ async fn get_tts(
         };
 
         let mut conn = redis_state.client.get().await?;
-        let cached_audio = conn.get::<'_, _, Option<String>>(&*cache_hash).await?
+        let cached_audio = conn.get::<_, Option<String>>(&*cache_hash).await?
             .map(|enc| redis_state.key.decrypt(&enc))
             .transpose()?
             .map(bytes::Bytes::from);
@@ -116,13 +122,14 @@ async fn get_tts(
 
     let audio = match mode {
         #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &voice).await?,
-        #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_tts(&text, &voice, speaking_rate as u16).await?,
-        #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_tts(&state.gcloud, &text, &voice, speaking_rate).await?,
+        #[cfg(feature="polly")] TTSMode::Polly => polly::get_tts(&state.polly, text, &voice, speaking_rate.map(|r| r as u8)).await?,
+        #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?,
+        #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_tts(&state.gcloud, &text, &voice, speaking_rate.unwrap_or(0.0)).await?,
     };
 
     tracing::debug!("Generated TTS from {cache_key}");
     if let Some((mut redis_conn, key, cache_hash)) = redis_info {
-        if let Err(err) = redis_conn.set::<'_, _, _, ()>(&*cache_hash, key.encrypt(&audio)).await {
+        if let Err(err) = redis_conn.set::<_, _, ()>(&*cache_hash, key.encrypt(&audio)).await {
             tracing::error!("Failed to cache: {err}");
         } else {
             tracing::debug!("Cached TTS from {cache_key}");
@@ -139,6 +146,7 @@ async fn get_tts(
 #[allow(non_camel_case_types)]
 enum TTSMode {
     #[cfg(feature="gtts")] gTTS,
+    #[cfg(feature="polly")] Polly,
     #[cfg(feature="espeak")] eSpeak,
     #[cfg(feature="gcloud")] gCloud,
 }
@@ -149,21 +157,24 @@ impl TTSMode {
             .header("Content-Type", match self {
                 #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
                 #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
-                #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus"
+                #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus",
+                #[cfg(feature="polly")]   Self::Polly   => "audio/ogg",
             })
             .body(axum::body::Full::new(data))
             .unwrap()
     }
 
-    fn check_voice(self, voice: &str) -> ResponseResult<()> {
+    #[cfg_attr(not(feature="polly"), allow(unused_variables, clippy::unnecessary_wraps))]
+    async fn check_voice(self, state: &State, voice: String) -> ResponseResult<String> {
         if match self {
-            #[cfg(feature="gtts")] Self::gTTS => gtts::check_voice(voice),
-            #[cfg(feature="espeak")] Self::eSpeak => espeak::check_voice(voice),
-            #[cfg(feature="gcloud")] Self::gCloud => gcloud::check_voice(voice),
+            #[cfg(feature="gtts")] Self::gTTS => gtts::check_voice(&voice),
+            #[cfg(feature="espeak")] Self::eSpeak => espeak::check_voice(&voice),
+            #[cfg(feature="gcloud")] Self::gCloud => gcloud::check_voice(&voice),
+            #[cfg(feature="polly")] Self::Polly => polly::check_voice(&state.polly, &voice).await?,
         } {
-            Ok(())
+            Ok(voice)
         } else {
-            Err(Error::UnknownVoice(voice.to_owned()))
+            Err(Error::UnknownVoice(voice))
         }
     }
 
@@ -173,7 +184,8 @@ impl TTSMode {
         if max_length.map_or(true, |max_length| match self {
             #[cfg(feature="gtts")]    Self::gTTS    => gtts::check_length(audio, max_length),
             #[cfg(feature="espeak")]  Self::eSpeak  => espeak::check_length(audio, max_length as u32),
-            #[cfg(feature="gcloud")]  Self::gCloud => true,
+            #[cfg(feature="gcloud")]  Self::gCloud  => true,
+            #[cfg(feature="polly")]   Self::Polly   => true,
         }) {
             Ok(())
         } else {
@@ -182,10 +194,12 @@ impl TTSMode {
     }
 
     #[cfg(any(feature="gcloud", feature="espeak"))]
-    fn check_speaking_rate(self, speaking_rate: f32) -> ResponseResult<()> {
-        if let Some(max) = self.max_speaking_rate() {
-            if speaking_rate > max {
-                return Err(Error::InvalidSpeakingRate(speaking_rate))
+    fn check_speaking_rate(self, speaking_rate: Option<f32>) -> ResponseResult<()> {
+        if let Some(speaking_rate) = speaking_rate {
+            if let Some(max) = self.max_speaking_rate() {
+                if speaking_rate > max {
+                    return Err(Error::InvalidSpeakingRate(speaking_rate))
+                }
             }
         }
 
@@ -197,6 +211,7 @@ impl TTSMode {
     const fn max_speaking_rate(self) -> Option<f32> {
         match self {
             #[cfg(feature="gtts")]    Self::gTTS    => None,
+            #[cfg(feature="polly")]   Self::Polly   => Some(500.0),
             #[cfg(feature="espeak")]  Self::eSpeak  => Some(400.0),
             #[cfg(feature="gcloud")]  Self::gCloud  => Some(4.0),
         }
@@ -207,8 +222,9 @@ impl Display for TTSMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             #[cfg(feature="gtts")] Self::gTTS => "gTTS",
+            #[cfg(feature="polly")]  Self::Polly => "Polly",
             #[cfg(feature="espeak")] Self::eSpeak => "eSpeak",
-            #[cfg(feature="gcloud")] Self::gCloud => "gCloud"
+            #[cfg(feature="gcloud")] Self::gCloud => "gCloud",
         })
     }
 }
@@ -222,6 +238,7 @@ struct RedisCache {
 struct State {
     auth_key: Option<String>,
     redis: Option<RedisCache>,
+    #[cfg(feature="polly")] polly: polly::State,
     #[cfg(feature="gtts")] gtts: tokio::sync::RwLock<gtts::State>,
     #[cfg(feature="gcloud")] gcloud: tokio::sync::RwLock<gcloud::State>
 }
@@ -246,6 +263,7 @@ async fn main() -> Result<()> {
     let redis_uri = std::env::var("REDIS_URI").ok();
     let result = STATE.set(State {
         #[cfg(feature="gtts")] gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6().await?),
+        #[cfg(feature="polly")] polly: polly::State::new(&aws_config::load_from_env().await),
         #[cfg(feature="gcloud")] gcloud: gcloud::State::new()?,
 
         auth_key: std::env::var("AUTH_KEY").ok(),
@@ -265,6 +283,7 @@ async fn main() -> Result<()> {
         .route("/modes", axum::routing::get(|| async {
             axum::Json([
                 #[cfg(feature="gtts")] TTSMode::gTTS.to_string(),
+                #[cfg(feature="polly")] TTSMode::Polly.to_string(),
                 #[cfg(feature="espeak")] TTSMode::eSpeak.to_string(),
                 #[cfg(feature="gcloud")] TTSMode::gCloud.to_string(),
             ])
