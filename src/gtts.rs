@@ -121,7 +121,7 @@ pub fn check_voice(voice: &str) -> bool {
 }
 
 pub fn check_length(audio: &[u8], max_length: u64) -> bool {
-    mp3_duration::from_read(&mut audio.reader()).unwrap().as_secs() < max_length
+    mp3_duration::from_read(&mut audio.reader()).map_or(true, |d| d.as_secs() < max_length)
 }
 
 
