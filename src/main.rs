@@ -40,20 +40,20 @@ async fn get_voices(
         }
     );
 
-    #[cfg(feature="polly")]
+    #[cfg(any(feature="gcloud", feature="polly"))]
     let state = STATE.get().unwrap();
 
     Ok(axum::Json(
         if raw {match mode {
             #[cfg(feature="gtts")] TTSMode::gTTS => to_value(gtts::get_raw_voices()),
-            #[cfg(feature="gcloud")] TTSMode::gCloud => to_value(gcloud::get_raw_voices()),
+            #[cfg(feature="gcloud")] TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud).await?),
             #[cfg(feature="polly")] TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
 
             #[cfg(feature="espeak")] TTSMode::eSpeak => to_value(espeak::get_voices()),
         }?} else {to_value(match mode {
             #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_voices(),
             #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices(),
-            #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_voices(),
+            #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
             #[cfg(feature="polly")]  TTSMode::Polly  => polly::get_voices(&state.polly).await?,
         })?},
     ))
@@ -169,7 +169,7 @@ impl TTSMode {
         if match self {
             #[cfg(feature="gtts")] Self::gTTS => gtts::check_voice(&voice),
             #[cfg(feature="espeak")] Self::eSpeak => espeak::check_voice(&voice),
-            #[cfg(feature="gcloud")] Self::gCloud => gcloud::check_voice(&voice),
+            #[cfg(feature="gcloud")] Self::gCloud => gcloud::check_voice(&state.gcloud, &voice).await?,
             #[cfg(feature="polly")] Self::Polly => polly::check_voice(&state.polly, &voice).await?,
         } {
             Ok(voice)
