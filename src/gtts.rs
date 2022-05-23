@@ -44,7 +44,7 @@ pub async fn get_random_ipv6() -> Result<State> {
 
         let check_request = http.get(parse_url("Hello", "en")).send().await;
         let fail_reason = match is_block(check_request).await? {
-            CheckResult::Ok(_) => {
+            CheckResult::Ok(..) => {
                 tracing::warn!("Generated random IP: {ip}");
                 break Ok(State{ip, http})
             },
@@ -59,7 +59,7 @@ pub async fn get_random_ipv6() -> Result<State> {
 }
 
 enum CheckResult {
-    Ok(bytes::Bytes),
+    Ok(Option<reqwest::header::HeaderValue>, bytes::Bytes),
     NormalBlock,
     TimeoutBlock,
     HostUnreachable,
@@ -76,7 +76,10 @@ async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResul
             if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 Ok(CheckResult::NormalBlock)
             } else {
-                Ok(CheckResult::Ok(resp.bytes().await?))
+                Ok(CheckResult::Ok(
+                    resp.headers().get(reqwest::header::CONTENT_TYPE).cloned(),
+                    resp.bytes().await?
+                ))
             }
         },
         Err(err) => {
@@ -85,13 +88,14 @@ async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResul
             } else if is_host_unreachable(&err) {
                 Ok(CheckResult::HostUnreachable)
             } else {
-                Err(dbg!(err).into())
+                Err(err.into())
             }
         },
     }
 }
 
-pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<bytes::Bytes> {
+pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
+    let mut content_type = None;
     let mut audio = Vec::new();
 
     let chunks: Vec<String> = text.chars().chunks(200).into_iter().map(Iterator::collect).collect();
@@ -102,7 +106,11 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<b
                 (ip, http.get(parse_url(&chunk, voice)).send().await)
             };
 
-            if let CheckResult::Ok(audio_chunk) = is_block(result).await? {
+            if let CheckResult::Ok(content_type_, audio_chunk) = is_block(result).await? {
+                if let Some(content_type_) = content_type_ {
+                    content_type = Some(content_type_);
+                }
+
                 break audio.extend(audio_chunk)
             }
 
@@ -113,7 +121,8 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<b
             *state = get_random_ipv6().await?;
         }
     }
-    Ok(bytes::Bytes::from(audio))
+
+    Ok((bytes::Bytes::from(audio), content_type))
 }
 
 pub fn check_voice(voice: &str) -> bool {

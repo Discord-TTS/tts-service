@@ -6,11 +6,14 @@ compile_error!("Either feature `gtts`, `espeak`, `gcloud`, or `polly` must be en
 
 use std::{str::FromStr, fmt::Display, borrow::Cow};
 
+use axum::{http::header::HeaderValue, response::Response};
 use once_cell::sync::OnceCell;
 use sha2::Digest;
 use redis::AsyncCommands;
 use serde_json::to_value;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+#[cfg(any(feature="polly", feature="gcloud"))] use std::fmt::Write as _;
 
 #[cfg(feature="gtts")] mod gtts;
 #[cfg(feature="polly")] mod polly;
@@ -66,32 +69,39 @@ struct GetTTS {
     #[serde(rename="lang")] voice: String,
     #[serde(default)] speaking_rate: Option<f32>,
     #[cfg(any(feature="gtts", feature="espeak"))] max_length: Option<u64>,
+    #[cfg(any(feature="polly", feature="gcloud"))] #[serde(default)] preferred_format: Option<String>,
 }
 
 async fn get_tts(
     axum::extract::Query(payload): axum::extract::Query<GetTTS>,
     headers: axum::http::HeaderMap,
-) -> ResponseResult<impl axum::response::IntoResponse> {
+) -> ResponseResult<Response<axum::body::Full<bytes::Bytes>>> {
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
-        if headers.get("Authorization").map(axum::http::header::HeaderValue::to_str).transpose()? != Some(auth_key) {
+        if headers.get("Authorization").map(HeaderValue::to_str).transpose()? != Some(auth_key) {
             return Err(Error::Unauthorized);
         }
     }
 
-    cfg_if::cfg_if!(
-        if #[cfg(any(feature="gtts", feature="espeak"))] {
-            let GetTTS{text, voice, mode, speaking_rate, max_length} = payload;
-        } else {
-            let GetTTS{text, voice, mode, speaking_rate} = payload;
-        }
-    );
+    #[cfg(any(feature="polly", feature="gcloud"))]
+    let preferred_format = payload.preferred_format;
+    let speaking_rate = payload.speaking_rate;
+    let voice = payload.voice;
+    let mode = payload.mode;
+    let text = payload.text;
 
     #[cfg(any(feature="gcloud", feature="espeak"))]
     mode.check_speaking_rate(speaking_rate)?;
     let voice = mode.check_voice(state, voice).await?;
 
-    let cache_key = format!("{text} | {voice} | {mode} | {}", speaking_rate.unwrap_or(0.0));
+    #[cfg_attr(not(any(feature="polly", feature="gcloud")), allow(unused_mut))]
+    let mut cache_key = format!("{text} | {voice} | {mode} | {}", speaking_rate.unwrap_or(0.0));
+
+    #[cfg(any(feature="polly", feature="gcloud"))]
+    if let Some(preferred_format) = preferred_format.as_ref() {
+        write!(cache_key, "| {preferred_format}").unwrap();
+    }
+
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
     let redis_info = if let Some(redis_state) = &state.redis {
@@ -109,10 +119,10 @@ async fn get_tts(
 
         if let Some(cached_audio) = cached_audio {
             #[cfg(any(feature="gtts", feature="espeak"))]
-            mode.check_length(&cached_audio, max_length)?;
+            mode.check_length(&cached_audio, payload.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
-            return Ok(mode.into_response(cached_audio));
+            return mode.into_response(cached_audio, None);
         }
 
         Some((conn, &redis_state.key, cache_hash))
@@ -120,11 +130,11 @@ async fn get_tts(
         None
     };
 
-    let audio = match mode {
+    let (audio, content_type) = match mode {
         #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &voice).await?,
-        #[cfg(feature="polly")] TTSMode::Polly => polly::get_tts(&state.polly, text, &voice, speaking_rate.map(|r| r as u8)).await?,
         #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?,
-        #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_tts(&state.gcloud, &text, &voice, speaking_rate.unwrap_or(0.0)).await?,
+        #[cfg(feature="polly")] TTSMode::Polly => polly::get_tts(&state.polly, text, &voice, speaking_rate.map(|r| r as u8), preferred_format).await?,
+        #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_tts(&state.gcloud, &text, &voice, speaking_rate.unwrap_or(0.0), preferred_format).await?,
     };
 
     tracing::debug!("Generated TTS from {cache_key}");
@@ -137,8 +147,8 @@ async fn get_tts(
     };
 
     #[cfg(any(feature="gtts", feature="espeak"))]
-    mode.check_length(&audio, max_length)?;
-    Ok(mode.into_response(audio))
+    mode.check_length(&audio, payload.max_length)?;
+    mode.into_response(audio, content_type)
 }
 
 
@@ -152,16 +162,16 @@ enum TTSMode {
 }
 
 impl TTSMode {
-    fn into_response(self, data: bytes::Bytes) -> impl axum::response::IntoResponse {
-        axum::response::Response::builder()
-            .header("Content-Type", match self {
+    fn into_response<T: bytes::Buf>(self, data: T, content_type: Option<HeaderValue>) -> ResponseResult<Response<axum::body::Full<T>>> {
+        Response::builder()
+            .header(axum::http::header::CONTENT_TYPE, content_type.unwrap_or_else(|| HeaderValue::from_static(match self {
                 #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
                 #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
                 #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus",
                 #[cfg(feature="polly")]   Self::Polly   => "audio/ogg",
-            })
+            })))
             .body(axum::body::Full::new(data))
-            .unwrap()
+            .map_err(Into::into)
     }
 
     #[cfg_attr(not(feature="polly"), allow(unused_variables, clippy::unnecessary_wraps))]
@@ -333,7 +343,7 @@ impl std::fmt::Display for Error {
 }
 
 impl axum::response::IntoResponse for Error {
-    fn into_response(self) -> axum::response::Response {
+    fn into_response(self) -> Response {
         if let Error::Unknown(inner) = &self {
             tracing::error!("{inner:?}");
         };

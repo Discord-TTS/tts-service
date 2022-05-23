@@ -44,20 +44,31 @@ impl serde::Serialize for VoiceLocal {
 }
 
 
-pub async fn get_tts(state: &State, mut text: String, voice: &str, speaking_rate: Option<u8>) -> Result<bytes::Bytes> {
+pub async fn get_tts(
+    state: &State,
+    mut text: String, voice: &str,
+    speaking_rate: Option<u8>, preferred_format: Option<String>
+) -> Result<(bytes::Bytes, Option<axum::http::header::HeaderValue>)> {
     if let Some(speaking_rate) = speaking_rate {
         text = format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>");
     }
 
     let resp = state.synthesize_speech()
         .set_text_type(Some(if speaking_rate.is_some() {TextType::Ssml} else {TextType::Text}))
-        .set_output_format(Some(OutputFormat::OggVorbis))
+        .set_output_format(preferred_format.map(|pf| match pf.to_lowercase().as_str() {
+            "mp3" => OutputFormat::Mp3,
+            "pcm" => OutputFormat::Pcm,
+            _ => OutputFormat::OggVorbis, // includes "ogg_vorbis" variant
+        }))
         .set_engine(Some(Engine::Standard))
         .set_voice_id(Some(voice.into()))
         .set_text(Some(text))
         .send().await?;
 
-    Ok(resp.audio_stream.collect().await?.into_bytes())
+    Ok((
+        resp.audio_stream.collect().await?.into_bytes(),
+        resp.content_type.map(TryInto::try_into).and_then(Result::ok)
+    ))
 }
 
 

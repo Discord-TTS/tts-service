@@ -2,7 +2,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::Result;
 
-pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<bytes::Bytes> {
+pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(bytes::Bytes, Option<axum::http::header::HeaderValue>)> {
     if !VOICES.iter().any(|s| s.as_str() == voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
@@ -54,7 +54,10 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<byte
     raw_wav[4..8].copy_from_slice(&(wav_len - 8).to_le_bytes());
     raw_wav[40..44].copy_from_slice(&(wav_len - 44).to_le_bytes());
 
-    Ok(bytes::Bytes::from(raw_wav))
+    Ok((
+        bytes::Bytes::from(raw_wav),
+        Some(axum::http::header::HeaderValue::from_static("audio/wav"))
+    ))
 }
 
 pub fn check_length(audio: &[u8], max_length: u32) -> bool {
