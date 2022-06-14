@@ -55,11 +55,11 @@ pub async fn get_tts(
 
     let resp = state.synthesize_speech()
         .set_text_type(Some(if speaking_rate.is_some() {TextType::Ssml} else {TextType::Text}))
-        .set_output_format(preferred_format.map(|pf| match pf.to_lowercase().as_str() {
-            "mp3" => OutputFormat::Mp3,
-            "pcm" => OutputFormat::Pcm,
-            _ => OutputFormat::OggVorbis, // includes "ogg_vorbis" variant
-        }))
+        .set_output_format(preferred_format.and_then(|pf| match pf.to_lowercase().as_str() {
+            "mp3" => Some(OutputFormat::Mp3),
+            "pcm" => Some(OutputFormat::Pcm),
+            _ => None
+        }).or(Some(OutputFormat::OggVorbis)))
         .set_engine(Some(Engine::Standard))
         .set_voice_id(Some(voice.into()))
         .set_text(Some(text))
