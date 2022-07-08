@@ -1,4 +1,3 @@
-use bytes::Buf;
 use itertools::Itertools;
 use rand::Rng;
 use tokio::sync::RwLock;
@@ -9,7 +8,7 @@ use crate::Result;
 #[derive(Clone)]
 pub struct State {
     ip: std::net::IpAddr,
-    http: reqwest::Client
+    pub http: reqwest::Client
 }
 
 fn parse_url(text: &str, lang: &str) -> reqwest::Url {
@@ -23,6 +22,8 @@ fn parse_url(text: &str, lang: &str) -> reqwest::Url {
 }
 
 pub async fn get_random_ipv6() -> Result<State> {
+    //return Ok(State {ip: "0.0.0.0".parse()?, http: reqwest::Client::new()});
+
     let ip_block = std::env::var("IPV6_BLOCK")
         .expect("IPV6_BLOCK not set!").parse()
         .expect("Invalid IPV6 Block!");
@@ -127,10 +128,6 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<(
 
 pub fn check_voice(voice: &str) -> bool {
     get_voices().iter().any(|s| s.as_str() == voice)
-}
-
-pub fn check_length(audio: &[u8], max_length: u64) -> bool {
-    mp3_duration::from_read(&mut audio.reader()).map_or(true, |d| d.as_secs() < max_length)
 }
 
 

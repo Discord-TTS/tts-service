@@ -1,8 +1,8 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::unused_async, clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_lossless)]
 
-#[cfg(not(any(feature="gtts", feature="espeak", feature="gcloud", feature="polly")))]
-compile_error!("Either feature `gtts`, `espeak`, `gcloud`, or `polly` must be enabled!");
+#[cfg(not(any(feature="gtts", feature="tiktok", feature="espeak", feature="gcloud", feature="polly")))]
+compile_error!("Either feature `gtts`, `tiktok`, `espeak`, `gcloud`, `polly` must be enabled!");
 
 use std::{str::FromStr, fmt::Display, borrow::Cow};
 
@@ -17,11 +17,20 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature="gtts")] mod gtts;
 #[cfg(feature="polly")] mod polly;
+#[cfg(feature="tiktok")] mod tiktok;
 #[cfg(feature="espeak")] mod espeak;
 #[cfg(feature="gcloud")] mod gcloud;
 
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
+
+#[must_use]
+#[cfg(any(feature = "gtts", feature = "tiktok"))]
+pub fn check_mp3_length(audio: &[u8], max_length: u64) -> bool {
+    use bytes::Buf;
+    mp3_duration::from_read(&mut audio.reader()).map_or(true, |d| d.as_secs() < max_length)
+}
+
 
 #[derive(serde::Deserialize)]
 struct GetVoices {
@@ -48,16 +57,18 @@ async fn get_voices(
 
     Ok(axum::Json(
         if raw {match mode {
-            #[cfg(feature="gtts")] TTSMode::gTTS => to_value(gtts::get_raw_voices()),
+            #[cfg(feature="gtts")]   TTSMode::gTTS   => to_value(gtts::get_raw_voices()),
+            #[cfg(feature="tiktok")] TTSMode::TikTok => to_value(tiktok::get_raw_voices()),
+            #[cfg(feature="polly")]  TTSMode::Polly  => to_value(polly::get_raw_voices(&state.polly).await?),
             #[cfg(feature="gcloud")] TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud).await?),
-            #[cfg(feature="polly")] TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
 
             #[cfg(feature="espeak")] TTSMode::eSpeak => to_value(espeak::get_voices()),
         }?} else {to_value(match mode {
-            #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_voices(),
+            #[cfg(feature="gtts")]   TTSMode::gTTS   => gtts::get_voices(),
             #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices(),
-            #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
+            #[cfg(feature="tiktok")] TTSMode::TikTok => tiktok::get_voices(),
             #[cfg(feature="polly")]  TTSMode::Polly  => polly::get_voices(&state.polly).await?,
+            #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
         })?},
     ))
 }
@@ -86,13 +97,13 @@ async fn get_tts(
     #[cfg(any(feature="polly", feature="gcloud"))]
     let preferred_format = payload.preferred_format;
     let speaking_rate = payload.speaking_rate;
-    let voice = payload.voice;
+    let mut voice = payload.voice;
     let mode = payload.mode;
     let text = payload.text;
 
     #[cfg(any(feature="gcloud", feature="espeak"))]
     mode.check_speaking_rate(speaking_rate)?;
-    let voice = mode.check_voice(state, voice).await?;
+    voice = mode.check_voice(state, voice).await?;
 
     #[cfg_attr(not(any(feature="polly", feature="gcloud")), allow(unused_mut))]
     let mut cache_key = format!("{text} | {voice} | {mode} | {}", speaking_rate.unwrap_or(0.0));
@@ -132,6 +143,7 @@ async fn get_tts(
 
     let (audio, content_type) = match mode {
         #[cfg(feature="gtts")] TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &voice).await?,
+        #[cfg(feature="tiktok")] TTSMode::TikTok => tiktok::get_tts(&state.tiktok, &text, &voice).await?,
         #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?,
         #[cfg(feature="polly")] TTSMode::Polly => polly::get_tts(&state.polly, text, &voice, speaking_rate.map(|r| r as u8), preferred_format).await?,
         #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_tts(&state.gcloud, &text, &voice, speaking_rate.unwrap_or(0.0), preferred_format).await?,
@@ -157,6 +169,7 @@ async fn get_tts(
 enum TTSMode {
     #[cfg(feature="gtts")] gTTS,
     #[cfg(feature="polly")] Polly,
+    #[cfg(feature="tiktok")] TikTok,
     #[cfg(feature="espeak")] eSpeak,
     #[cfg(feature="gcloud")] gCloud,
 }
@@ -166,6 +179,7 @@ impl TTSMode {
         Response::builder()
             .header(axum::http::header::CONTENT_TYPE, content_type.unwrap_or_else(|| HeaderValue::from_static(match self {
                 #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
+                #[cfg(feature="tiktok")]  Self::TikTok  => "audio/mpeg",
                 #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
                 #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus",
                 #[cfg(feature="polly")]   Self::Polly   => "audio/ogg",
@@ -177,10 +191,11 @@ impl TTSMode {
     #[cfg_attr(not(feature="polly"), allow(unused_variables, clippy::unnecessary_wraps))]
     async fn check_voice(self, state: &State, voice: String) -> ResponseResult<String> {
         if match self {
-            #[cfg(feature="gtts")] Self::gTTS => gtts::check_voice(&voice),
+            #[cfg(feature="gtts")]   Self::gTTS   => gtts::check_voice(&voice),
+            #[cfg(feature="tiktok")] Self::TikTok => tiktok::check_voice(&voice),
             #[cfg(feature="espeak")] Self::eSpeak => espeak::check_voice(&voice),
             #[cfg(feature="gcloud")] Self::gCloud => gcloud::check_voice(&state.gcloud, &voice).await?,
-            #[cfg(feature="polly")] Self::Polly => polly::check_voice(&state.polly, &voice).await?,
+            #[cfg(feature="polly")]  Self::Polly  => polly::check_voice(&state.polly, &voice).await?,
         } {
             Ok(voice)
         } else {
@@ -192,7 +207,8 @@ impl TTSMode {
     #[allow(unused_variables)]
     fn check_length(self, audio: &[u8], max_length: Option<u64>) -> ResponseResult<()> {
         if max_length.map_or(true, |max_length| match self {
-            #[cfg(feature="gtts")]    Self::gTTS    => gtts::check_length(audio, max_length),
+            #[cfg(feature="gtts")]    Self::gTTS    => check_mp3_length(audio, max_length),
+            #[cfg(feature="tiktok")]  Self::TikTok  => check_mp3_length(audio, max_length),
             #[cfg(feature="espeak")]  Self::eSpeak  => espeak::check_length(audio, max_length as u32),
             #[cfg(feature="gcloud")]  Self::gCloud  => true,
             #[cfg(feature="polly")]   Self::Polly   => true,
@@ -221,6 +237,7 @@ impl TTSMode {
     const fn max_speaking_rate(self) -> Option<f32> {
         match self {
             #[cfg(feature="gtts")]    Self::gTTS    => None,
+            #[cfg(feature="tiktok")]  Self::TikTok  => None,
             #[cfg(feature="polly")]   Self::Polly   => Some(500.0),
             #[cfg(feature="espeak")]  Self::eSpeak  => Some(400.0),
             #[cfg(feature="gcloud")]  Self::gCloud  => Some(4.0),
@@ -233,6 +250,7 @@ impl Display for TTSMode {
         f.write_str(match self {
             #[cfg(feature="gtts")] Self::gTTS => "gTTS",
             #[cfg(feature="polly")]  Self::Polly => "Polly",
+            #[cfg(feature="tiktok")] Self::TikTok => "TikTok",
             #[cfg(feature="espeak")] Self::eSpeak => "eSpeak",
             #[cfg(feature="gcloud")] Self::gCloud => "gCloud",
         })
@@ -249,6 +267,7 @@ struct State {
     auth_key: Option<String>,
     redis: Option<RedisCache>,
     #[cfg(feature="polly")] polly: polly::State,
+    #[cfg(feature="tiktok")] tiktok: tiktok::State,
     #[cfg(feature="gtts")] gtts: tokio::sync::RwLock<gtts::State>,
     #[cfg(feature="gcloud")] gcloud: tokio::sync::RwLock<gcloud::State>
 }
@@ -270,11 +289,15 @@ async fn main() -> Result<()> {
         espeakng::initialise(None)?;
     }
 
+    #[cfg(any(feature = "tiktok", feature = "gcloud"))]
+    let reqwest_client = reqwest::Client::new();
+
     let redis_uri = std::env::var("REDIS_URI").ok();
     let result = STATE.set(State {
+        #[cfg(feature="tiktok")] tiktok: tiktok::State::new(reqwest_client.clone()),
+        #[cfg(feature="gcloud")] gcloud: gcloud::State::new(reqwest_client)?,
         #[cfg(feature="gtts")] gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6().await?),
         #[cfg(feature="polly")] polly: polly::State::new(&aws_config::load_from_env().await),
-        #[cfg(feature="gcloud")] gcloud: gcloud::State::new()?,
 
         auth_key: std::env::var("AUTH_KEY").ok(),
         redis: redis_uri.as_ref().map(|uri| {
@@ -296,6 +319,7 @@ async fn main() -> Result<()> {
                 #[cfg(feature="polly")] TTSMode::Polly.to_string(),
                 #[cfg(feature="espeak")] TTSMode::eSpeak.to_string(),
                 #[cfg(feature="gcloud")] TTSMode::gCloud.to_string(),
+                #[cfg(feature="tiktok")] TTSMode::TikTok.to_string(),
             ])
         }));
 

@@ -78,16 +78,17 @@ version = "0.10"
 optional = true
 
 [dependencies.aws-sdk-polly]
-version = "0.13.0"
+version = "0.15.0"
 optional = true
 
 [dependencies.aws-config]
-version = "0.13.0"
+version = "0.15.0"
 optional = true
 
 [features]
 gtts = ["rand", "reqwest", "ipgen", "mp3-duration", "itertools"]
 gcloud = ["reqwest", "reqwest/json", "jsonwebtoken", "base64"]
+tiktok = ["reqwest", "base64", "itertools", "mp3-duration"]
 espeak = ["tokio/process", "tokio/io-util", "espeakng"]
 polly = ["aws-sdk-polly", "aws-config"]
 

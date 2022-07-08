@@ -13,7 +13,7 @@ pub struct State {
 }
 
 impl State {
-    pub(crate) fn new() -> Result<RwLock<Self>> {
+    pub(crate) fn new(reqwest: reqwest::Client) -> Result<RwLock<Self>> {
         let service_account: ServiceAccount = serde_json::from_str(&std::fs::read_to_string(std::env::var("GOOGLE_APPLICATION_CREDENTIALS").unwrap())?)?;
         let (jwt_token, expire_time) = generate_jwt(
             service_account.private_key.clone(),
@@ -21,10 +21,7 @@ impl State {
             std::time::SystemTime::now()
         )?;
 
-        Ok(RwLock::new(Self {
-            service_account, expire_time, jwt_token,
-            reqwest: reqwest::Client::new()
-        }))
+        Ok(RwLock::new(Self {service_account, expire_time, reqwest, jwt_token}))
     } 
 }
 
