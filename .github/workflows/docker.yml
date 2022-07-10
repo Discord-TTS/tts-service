@@ -27,4 +27,4 @@ jobs:
         with:
           push: true
           tags: gnomeddev/tts-service:latest
-          build-args: "MODES=gtts,espeak,polly,gcloud"
+          build-args: "MODES=gtts,espeak,polly,gcloud,tiktok"
