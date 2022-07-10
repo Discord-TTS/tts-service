@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use reqwest::header::HeaderValue;
 
 use crate::Result;
@@ -28,9 +29,12 @@ struct TTResponseData<'a> {
     v_str: &'a str
 }
 
+static BASE_URL: Lazy<reqwest::Url> = Lazy::new(|| {
+    reqwest::Url::parse("https://api16-normal-useast5.us.tiktokv.com/media/api/text/speech/invoke/?speaker_map_type=0").unwrap()
+});
 
 fn parse_url(text: &str, voice: &str) -> reqwest::Url {
-    let mut url = reqwest::Url::parse("https://api16-normal-useast5.us.tiktokv.com/media/api/text/speech/invoke/?speaker_map_type=0").unwrap();
+    let mut url = BASE_URL.clone();
     url.query_pairs_mut()
         .append_pair("text_speaker", voice)
         .append_pair("req_text", text)
