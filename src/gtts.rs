@@ -27,11 +27,11 @@ fn parse_url(text: &str, lang: &str) -> reqwest::Url {
 }
 
 pub async fn get_random_ipv6() -> Result<State> {
-    //return Ok(State {ip: "0.0.0.0".parse()?, http: reqwest::Client::new()});
-
-    let ip_block = std::env::var("IPV6_BLOCK")
-        .expect("IPV6_BLOCK not set!").parse()
-        .expect("Invalid IPV6 Block!");
+    let ip_block = match std::env::var("IPV6_BLOCK") {
+        Ok(ip_block) if &ip_block == "DISABLE" => return Ok(State {ip: "0.0.0.0".parse()?, http: reqwest::Client::new()}),
+        Ok(ip_block) => ip_block.parse().expect("Invalid IPV6 Block!"),
+        _ => panic!("IPV6_BLOCK not set! Set to \"DISABLE\" to disable rate limit bypass"),
+    };
 
     let mut attempts = 1;
     loop {
