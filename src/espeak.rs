@@ -22,11 +22,33 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
             .expect("Failed to open espeak stdout")
             .try_into()?;
 
-        let mbrola_process = tokio::process::Command::new("mbrola")
+        let mut mbrola_process = tokio::process::Command::new("mbrola")
             .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .stdin(espeak_stdout)
             .args(["-e", &format!("/usr/share/mbrola/{voice}/{voice}", voice=voice), "-", "-.wav"])
             .spawn()?;
+
+        // Filter out some warning messages from mbrola that clutter logs
+        if let Some(mut mbrola_stderr) = mbrola_process.stderr.take() {
+            tokio::spawn(async move {
+                let mut buffer = String::from("this is an actual error\n").into_bytes();
+                while let Ok(written_bytes) = dbg!(mbrola_stderr.read_buf(&mut buffer).await) {
+                    if written_bytes == 0 {
+                        break;
+                    }
+
+                    let current_msg = std::str::from_utf8(&buffer).unwrap_or("TTS Service Error: Invalid UTF8");
+                    if !current_msg.contains("unknown, replaced with ") {
+                        tracing::error!("Mbrola Error: {current_msg}")
+                    }
+
+                    buffer.clear();
+                }
+
+                tracing::info!("mbrola_stderr watcher closed")
+            });
+        };
 
         let output = mbrola_process.wait_with_output().await?;
         if output.stdout.len() == 44 {
