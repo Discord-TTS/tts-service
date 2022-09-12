@@ -18,7 +18,7 @@ impl State {
 #[derive(serde::Deserialize)]
 struct TTResponse<'a> {
     #[serde(borrow)]
-    data: TTResponseData<'a>,
+    data: Option<TTResponseData<'a>>,
 
     status_msg: &'a str,
     status_code: u16,
@@ -55,12 +55,15 @@ pub async fn get_tts(state: &State, text: &str, voice: &str) -> Result<(bytes::B
         let resp_json: TTResponse<'_> = serde_json::from_slice(&resp_raw)?;
         let status_code = resp_json.status_code;
 
-        if status_code == 0 {
-            let resp_audio = base64::decode(resp_json.data.v_str)?;
-            audio.extend(&resp_audio);
-        } else {
-            anyhow::bail!("TikTok Status Code {status_code}: {}", resp_json.status_msg)
+        if let Some(resp_data) = resp_json.data {
+            if status_code == 0 {
+                let resp_audio = base64::decode(resp_data.v_str)?;
+                audio.extend(&resp_audio);
+                continue;
+            }
         }
+
+        anyhow::bail!("TikTok Status Code {status_code}: {}", resp_json.status_msg)
     }
 
     Ok((
