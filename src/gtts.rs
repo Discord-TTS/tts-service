@@ -122,9 +122,10 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<(
 
             // Generate a new client, with an new IP, and try again
             let mut state = state.write().await;
-            tracing::warn!("IP {ip} has been blocked!");
-
-            *state = get_random_ipv6().await?;
+            if state.ip == ip {
+                tracing::warn!("IP {ip} has been blocked!");
+                *state = get_random_ipv6().await?;
+            }
         }
     }
 
