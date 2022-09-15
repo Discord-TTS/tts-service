@@ -32,8 +32,8 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
         // Filter out some warning messages from mbrola that clutter logs
         if let Some(mut mbrola_stderr) = mbrola_process.stderr.take() {
             tokio::spawn(async move {
-                let mut buffer = String::from("this is an actual error\n").into_bytes();
-                while let Ok(written_bytes) = dbg!(mbrola_stderr.read_buf(&mut buffer).await) {
+                let mut buffer = Vec::new();
+                while let Ok(written_bytes) = mbrola_stderr.read_buf(&mut buffer).await {
                     if written_bytes == 0 {
                         break;
                     }
@@ -46,7 +46,7 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
                     buffer.clear();
                 }
 
-                tracing::info!("mbrola_stderr watcher closed")
+                tracing::debug!("mbrola_stderr watcher closed")
             });
         };
 
