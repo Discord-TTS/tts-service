@@ -78,7 +78,7 @@ pub fn check_voice(voice: &str) -> bool {
 
 
 pub fn get_voices() -> Vec<String> {
-    get_raw_voices().into_iter().map(|(k, _)| k).collect()
+    get_raw_voices().into_keys().collect()
 }
 
 pub fn get_raw_voices() -> std::collections::BTreeMap<String, String> {

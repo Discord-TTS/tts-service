@@ -107,7 +107,7 @@ fn generate_google_json(content: &str, lang: &str, speaking_rate: f32, audio_enc
             },
             "voice": {
                 "languageCode": lang,
-                "name": format!("{}-Standard-{}", lang, variant),
+                "name": format!("{lang}-Standard-{variant}"),
             },
             "audioConfig": {
                 "audioEncoding": audio_encoding,

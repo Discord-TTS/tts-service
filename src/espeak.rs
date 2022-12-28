@@ -13,7 +13,7 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
         let espeak_process = tokio::process::Command::new("espeak")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .args(["--pho", "-q", "-s", &speaking_rate.to_string(), "-v", &format!("mb/mb-{}", voice), text])
+            .args(["--pho", "-q", "-s", &speaking_rate.to_string(), "-v", &format!("mb/mb-{voice}"), text])
             .spawn()?;
 
         let tokio::process::Child{stdout, stderr, ..} = espeak_process;
@@ -26,7 +26,7 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(espeak_stdout)
-            .args(["-e", &format!("/usr/share/mbrola/{voice}/{voice}", voice=voice), "-", "-.wav"])
+            .args(["-e", &format!("/usr/share/mbrola/{voice}/{voice}"), "-", "-.wav"])
             .spawn()?;
 
         // Filter out some warning messages from mbrola that clutter logs
