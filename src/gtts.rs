@@ -78,14 +78,14 @@ fn is_host_unreachable(err: &reqwest::Error) -> bool {
 
 async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResult> {
     match resp {
-        Ok(resp) => {
+        Ok(mut resp) => {
             if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 Ok(CheckResult::NormalBlock)
             } else {
-                Ok(CheckResult::Ok(
-                    resp.headers().get(reqwest::header::CONTENT_TYPE).cloned(),
-                    resp.bytes().await?
-                ))
+                let content_type = resp.headers_mut().remove(reqwest::header::CONTENT_TYPE);
+                let audio = resp.error_for_status()?.bytes().await?;
+
+                Ok(CheckResult::Ok(content_type, audio))
             }
         },
         Err(err) => {
