@@ -92,7 +92,6 @@ optional = true
 [features]
 gtts = ["rand", "reqwest", "ipgen", "mp3-duration", "itertools"]
 gcloud = ["reqwest", "reqwest/json", "jsonwebtoken", "base64"]
-tiktok = ["reqwest", "base64", "itertools", "mp3-duration"]
 espeak = ["tokio/process", "tokio/io-util", "espeakng"]
 polly = ["aws-sdk-polly", "aws-config"]
 
