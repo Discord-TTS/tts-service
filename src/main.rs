@@ -273,11 +273,6 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::registry().with(fmt_layer).with(filter).init();
 
-    #[cfg(feature="espeak")] {
-        // Init espeakng internally so we can fetch the voice path
-        espeakng::initialise(None)?;
-    }
-
     #[cfg(feature = "gcloud")]
     let reqwest_client = reqwest::Client::new();
 

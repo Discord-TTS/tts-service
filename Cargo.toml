@@ -69,10 +69,6 @@ optional = true
 version = "8"
 optional = true
 
-[dependencies.espeakng]
-version = "0.1"
-optional = true
-
 [dependencies.mp3-duration]
 version = "0.1"
 optional = true
@@ -92,7 +88,7 @@ optional = true
 [features]
 gtts = ["rand", "reqwest", "ipgen", "mp3-duration", "itertools"]
 gcloud = ["reqwest", "reqwest/json", "jsonwebtoken", "base64"]
-espeak = ["tokio/process", "tokio/io-util", "espeakng"]
+espeak = ["tokio/process", "tokio/io-util"]
 polly = ["aws-sdk-polly", "aws-config"]
 
 default = ["espeak"]

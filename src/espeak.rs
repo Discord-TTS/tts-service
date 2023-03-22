@@ -40,13 +40,13 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
 
                     let current_msg = std::str::from_utf8(&buffer).unwrap_or("TTS Service Error: Invalid UTF8");
                     if !current_msg.contains("unknown, replaced with ") {
-                        tracing::error!("Mbrola Error: {current_msg}")
+                        tracing::error!("Mbrola Error: {current_msg}");
                     }
 
                     buffer.clear();
                 }
 
-                tracing::debug!("mbrola_stderr watcher closed")
+                tracing::debug!("mbrola_stderr watcher closed");
             });
         };
 
@@ -94,11 +94,8 @@ pub fn check_length(audio: &[u8], max_length: u32) -> bool {
 
 static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
     || -> Result<_> {
-        let (_, mut voice_path) = espeakng::Speaker::info();
-        voice_path.push("voices/mb");
-
         let mut files = Vec::new();
-        for file in std::fs::read_dir(voice_path)? {
+        for file in std::fs::read_dir("/usr/local/share/espeak-ng-data/voices/mb")? {
             let file = file?;
             if file.file_type()?.is_file() {
                 let file_name = file.file_name().into_string().expect("Invalid filename!");

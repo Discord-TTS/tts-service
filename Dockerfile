@@ -12,12 +12,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 # Container to build the bot
 FROM chef AS builder
 
-# Build and install espeak-ng
-RUN apt-get update && apt-get install -y libclang-dev && apt-get clean && \ 
-    git clone https://github.com/espeak-ng/espeak-ng --depth 1 && cd espeak-ng && \
-    ./autogen.sh && ./configure --prefix=/usr && make && make install && \ 
-    cd .. && rm -rf espeak-ng
-
 # This is a dummy build to get the dependencies cached.
 COPY --from=planner /build/recipe.json recipe.json
 RUN cargo chef cook --release --no-default-features --features $MODES
