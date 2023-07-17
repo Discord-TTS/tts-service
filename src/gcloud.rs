@@ -22,7 +22,7 @@ impl State {
         )?;
 
         Ok(RwLock::new(Self {service_account, expire_time, reqwest, jwt_token}))
-    } 
+    }
 }
 
 
@@ -39,16 +39,18 @@ struct ServiceAccount {
 }
 
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy)]
+#[derive(serde::Deserialize, serde::Serialize, Default, Clone, Copy)]
 pub enum Gender {
     #[serde(rename="MALE")]   Male,
     #[serde(rename="FEMALE")] Female,
+    #[serde(rename="SSML_VOICE_GENDER_UNSPECIFIED")] #[default] Unspecified,
 }
 
 #[allow(non_snake_case)]
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct GoogleVoice {
     pub name: String,
+    #[serde(default)]
     pub ssmlGender: Gender,
     pub languageCodes: [String; 1],
 }
@@ -96,7 +98,7 @@ impl AudioEncoding {
 
 
 fn generate_google_json(content: &str, lang: &str, speaking_rate: f32, audio_encoding: &str) -> Result<serde_json::Value> {
-    let (lang, variant) = lang.split_once(' ').ok_or_else(|| 
+    let (lang, variant) = lang.split_once(' ').ok_or_else(||
         anyhow::anyhow!("{} cannot be parsed into lang and variant", lang)
     )?;
 
