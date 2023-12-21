@@ -7,9 +7,9 @@ compile_error!("Either feature `gtts`, `espeak`, `gcloud`, `polly` must be enabl
 use std::{str::FromStr, fmt::Display, borrow::Cow};
 
 use axum::{http::header::HeaderValue, response::Response};
+use deadpool_redis::redis::AsyncCommands;
 use once_cell::sync::OnceCell;
 use sha2::Digest;
-use redis::AsyncCommands;
 use serde_json::to_value;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -83,7 +83,7 @@ struct GetTTS {
 async fn get_tts(
     axum::extract::Query(payload): axum::extract::Query<GetTTS>,
     headers: axum::http::HeaderMap,
-) -> ResponseResult<Response<axum::body::Full<bytes::Bytes>>> {
+) -> ResponseResult<Response<axum::body::Body>> {
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
         if headers.get("Authorization").map(HeaderValue::to_str).transpose()? != Some(auth_key) {
