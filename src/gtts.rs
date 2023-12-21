@@ -6,18 +6,22 @@ use tokio::sync::RwLock;
 
 use crate::Result;
 
-
 #[derive(Clone)]
 pub struct State {
     ip: std::net::IpAddr,
-    pub http: reqwest::Client
+    pub http: reqwest::Client,
 }
 
 fn get_base_url() -> reqwest::Url {
     static BASE_URL: OnceLock<reqwest::Url> = OnceLock::new();
-    BASE_URL.get_or_init(|| {
-        reqwest::Url::parse("https://translate.google.com/translate_tts?ie=UTF-8&total=1&idx=0&client=tw-ob").unwrap()
-    }).clone()
+    BASE_URL
+        .get_or_init(|| {
+            reqwest::Url::parse(
+                "https://translate.google.com/translate_tts?ie=UTF-8&total=1&idx=0&client=tw-ob",
+            )
+            .unwrap()
+        })
+        .clone()
 }
 
 fn parse_url(text: &str, lang: &str) -> reqwest::Url {
@@ -32,7 +36,12 @@ fn parse_url(text: &str, lang: &str) -> reqwest::Url {
 
 pub async fn get_random_ipv6() -> Result<State> {
     let ip_block = match std::env::var("IPV6_BLOCK") {
-        Ok(ip_block) if &ip_block == "DISABLE" => return Ok(State {ip: "0.0.0.0".parse()?, http: reqwest::Client::new()}),
+        Ok(ip_block) if &ip_block == "DISABLE" => {
+            return Ok(State {
+                ip: "0.0.0.0".parse()?,
+                http: reqwest::Client::new(),
+            })
+        }
         Ok(ip_block) => ip_block.parse().expect("Invalid IPV6 Block!"),
         _ => panic!("IPV6_BLOCK not set! Set to \"DISABLE\" to disable rate limit bypass"),
     };
@@ -43,7 +52,7 @@ pub async fn get_random_ipv6() -> Result<State> {
             .sample_iter::<char, _>(rand::distributions::Standard)
             .take(16)
             .collect();
-    
+
         tracing::debug!("Generated random name: {:?}", name.as_bytes());
         let ip = ipgen::ip(&name, ip_block).unwrap();
 
@@ -56,8 +65,8 @@ pub async fn get_random_ipv6() -> Result<State> {
         let fail_reason = match is_block(check_request).await? {
             CheckResult::Ok(..) => {
                 tracing::warn!("Generated random IP: {ip}");
-                break Ok(State{ip, http})
-            },
+                break Ok(State { ip, http });
+            }
             CheckResult::NormalBlock => "429 block",
             CheckResult::TimeoutBlock => "timeout block",
             CheckResult::HostUnreachable => "unreachable error",
@@ -77,7 +86,9 @@ enum CheckResult {
 
 fn is_host_unreachable(err: &reqwest::Error) -> bool {
     let debug_message = format!("{err:?}");
-    ["No route to host", "HostUnreachable"].into_iter().all(|s| debug_message.contains(s))
+    ["No route to host", "HostUnreachable"]
+        .into_iter()
+        .all(|s| debug_message.contains(s))
 }
 
 async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResult> {
@@ -91,7 +102,7 @@ async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResul
 
                 Ok(CheckResult::Ok(content_type, audio))
             }
-        },
+        }
         Err(err) => {
             if err.is_timeout() {
                 Ok(CheckResult::TimeoutBlock)
@@ -100,19 +111,28 @@ async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResul
             } else {
                 Err(err.into())
             }
-        },
+        }
     }
 }
 
-pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
+pub async fn get_tts(
+    state: &RwLock<State>,
+    text: &str,
+    voice: &str,
+) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
     let mut content_type = None;
     let mut audio = Vec::new();
 
-    let chunks: Vec<String> = text.chars().chunks(200).into_iter().map(Iterator::collect).collect();
+    let chunks: Vec<String> = text
+        .chars()
+        .chunks(200)
+        .into_iter()
+        .map(Iterator::collect)
+        .collect();
     for chunk in chunks {
         loop {
             let (ip, result) = {
-                let State{ip, http} = state.read().await.clone();
+                let State { ip, http } = state.read().await.clone();
                 (ip, http.get(parse_url(&chunk, voice)).send().await)
             };
 
@@ -121,7 +141,7 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<(
                     content_type = Some(content_type_);
                 }
 
-                break audio.extend(audio_chunk)
+                break audio.extend(audio_chunk);
             }
 
             // Generate a new client, with an new IP, and try again
@@ -139,7 +159,6 @@ pub async fn get_tts(state: &RwLock<State>, text: &str, voice: &str) -> Result<(
 pub fn check_voice(voice: &str) -> bool {
     get_voices().iter().any(|s| s.as_str() == voice)
 }
-
 
 pub fn get_voices() -> Vec<String> {
     get_raw_voices().into_keys().collect()

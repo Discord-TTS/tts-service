@@ -5,7 +5,11 @@ use tokio::io::AsyncReadExt;
 
 use crate::Result;
 
-pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(bytes::Bytes, Option<HeaderValue>)> {
+pub async fn get_tts(
+    text: &str,
+    voice: &str,
+    speaking_rate: u16,
+) -> Result<(bytes::Bytes, Option<HeaderValue>)> {
     if !check_voice(voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
@@ -16,20 +20,32 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
         let espeak_process = tokio::process::Command::new("espeak")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .args(["--pho", "-q", "-s", &speaking_rate.to_string(), "-v", &format!("mb/mb-{voice}"), text])
+            .args([
+                "--pho",
+                "-q",
+                "-s",
+                &speaking_rate.to_string(),
+                "-v",
+                &format!("mb/mb-{voice}"),
+                text,
+            ])
             .spawn()?;
 
-        let tokio::process::Child{stdout, stderr, ..} = espeak_process;
+        let tokio::process::Child { stdout, stderr, .. } = espeak_process;
 
-        let espeak_stdout: std::process::Stdio = stdout
-            .expect("Failed to open espeak stdout")
-            .try_into()?;
+        let espeak_stdout: std::process::Stdio =
+            stdout.expect("Failed to open espeak stdout").try_into()?;
 
         let mut mbrola_process = tokio::process::Command::new("mbrola")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(espeak_stdout)
-            .args(["-e", &format!("/usr/share/mbrola/{voice}/{voice}"), "-", "-.wav"])
+            .args([
+                "-e",
+                &format!("/usr/share/mbrola/{voice}/{voice}"),
+                "-",
+                "-.wav",
+            ])
             .spawn()?;
 
         // Filter out some warning messages from mbrola that clutter logs
@@ -41,7 +57,8 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
                         break;
                     }
 
-                    let current_msg = std::str::from_utf8(&buffer).unwrap_or("TTS Service Error: Invalid UTF8");
+                    let current_msg =
+                        std::str::from_utf8(&buffer).unwrap_or("TTS Service Error: Invalid UTF8");
                     if !current_msg.contains("unknown, replaced with ") {
                         tracing::error!("Mbrola Error: {current_msg}");
                     }
@@ -60,14 +77,17 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
             let mut stderr = Vec::new();
             espeak_stderr.read_to_end(&mut stderr).await?;
 
-            if std::str::from_utf8(&stderr).unwrap().contains("mbrowrap error: unable to get .wav header from mbrola") {
+            if std::str::from_utf8(&stderr)
+                .unwrap()
+                .contains("mbrowrap error: unable to get .wav header from mbrola")
+            {
                 i += 1;
-                continue
+                continue;
             }
         };
 
         tracing::debug!("Generated eSpeak after {i} tries");
-        break output.stdout
+        break output.stdout;
     };
 
     // Fix the wav header to set the ChunkSize and SubChunk2Size
@@ -81,41 +101,43 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
 
     Ok((
         bytes::Bytes::from(raw_wav),
-        Some(HeaderValue::from_static("audio/wav"))
+        Some(HeaderValue::from_static("audio/wav")),
     ))
 }
 
 pub fn check_length(audio: &[u8], max_length: u32) -> bool {
-    audio.len() as u32 / (
-        u16::from_le_bytes(audio[22..24].try_into().unwrap()) as u32 * // Sample Rate
+    audio.len() as u32
+        / (u16::from_le_bytes(audio[22..24].try_into().unwrap()) as u32 * // Sample Rate
         u32::from_le_bytes(audio[24..28].try_into().unwrap()) *        // Number of Channels
         u16::from_le_bytes(audio[34..36].try_into().unwrap()) as u32   // Bits per Sample
-        / 8
-    ) < max_length
+        / 8)
+        < max_length
 }
-
 
 pub fn get_voices() -> &'static [String] {
     static VOICES: OnceLock<Vec<String>> = OnceLock::new();
-    VOICES.get_or_init(|| (|| {
-        let mut files = Vec::new();
-        for file in std::fs::read_dir("/usr/local/share/espeak-ng-data/voices/mb")? {
-            let file = file?;
-            if file.file_type()?.is_file() {
-                let file_name = file.file_name().into_string().expect("Invalid filename!");
-                let mut file_name_iter = file_name.split('-').skip(1);
-    
-                if let Some(language) = file_name_iter.next() {
-                    if file_name_iter.next().is_none() {
-                        files.push(language.to_owned());
+    VOICES.get_or_init(|| {
+        (|| {
+            let mut files = Vec::new();
+            for file in std::fs::read_dir("/usr/local/share/espeak-ng-data/voices/mb")? {
+                let file = file?;
+                if file.file_type()?.is_file() {
+                    let file_name = file.file_name().into_string().expect("Invalid filename!");
+                    let mut file_name_iter = file_name.split('-').skip(1);
+
+                    if let Some(language) = file_name_iter.next() {
+                        if file_name_iter.next().is_none() {
+                            files.push(language.to_owned());
+                        }
                     }
                 }
             }
-        };
-    
-        files.sort();
-        anyhow::Ok(files)
-    })().unwrap())
+
+            files.sort();
+            anyhow::Ok(files)
+        })()
+        .unwrap()
+    })
 }
 
 pub fn check_voice(voice: &str) -> bool {

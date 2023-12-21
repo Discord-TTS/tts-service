@@ -15,21 +15,28 @@ pub struct State {
 
 impl State {
     pub(crate) fn new(reqwest: reqwest::Client) -> Result<RwLock<Self>> {
-        let service_account: ServiceAccount = serde_json::from_str(&std::fs::read_to_string(std::env::var("GOOGLE_APPLICATION_CREDENTIALS").unwrap())?)?;
+        let service_account: ServiceAccount = serde_json::from_str(&std::fs::read_to_string(
+            std::env::var("GOOGLE_APPLICATION_CREDENTIALS").unwrap(),
+        )?)?;
+
         let (jwt_token, expire_time) = generate_jwt(
             service_account.private_key.clone(),
             &service_account.client_email,
-            std::time::SystemTime::now()
+            std::time::SystemTime::now(),
         )?;
 
-        Ok(RwLock::new(Self {service_account, expire_time, reqwest, jwt_token}))
+        Ok(RwLock::new(Self {
+            service_account,
+            expire_time,
+            reqwest,
+            jwt_token,
+        }))
     }
 }
 
-
 #[derive(serde::Deserialize)]
 struct AudioResponse<'a> {
-    #[serde(borrow, rename="audioContent")]
+    #[serde(borrow, rename = "audioContent")]
     audio_content: &'a str,
 }
 
@@ -39,12 +46,15 @@ struct ServiceAccount {
     pub client_email: String,
 }
 
-
 #[derive(serde::Deserialize, serde::Serialize, Default, Clone, Copy)]
 pub enum Gender {
-    #[serde(rename="MALE")]   Male,
-    #[serde(rename="FEMALE")] Female,
-    #[serde(rename="SSML_VOICE_GENDER_UNSPECIFIED")] #[default] Unspecified,
+    #[serde(rename = "MALE")]
+    Male,
+    #[serde(rename = "FEMALE")]
+    Female,
+    #[serde(rename = "SSML_VOICE_GENDER_UNSPECIFIED")]
+    #[default]
+    Unspecified,
 }
 
 #[allow(non_snake_case)]
@@ -74,7 +84,7 @@ impl AudioEncoding {
             "MULAW" => Some(AudioEncoding::MULAW),
             "ALAW" => Some(AudioEncoding::ALAW),
             "MP3" => Some(AudioEncoding::MP3),
-            _ => None
+            _ => None,
         }
     }
 
@@ -97,30 +107,36 @@ impl AudioEncoding {
     }
 }
 
+fn generate_google_json(
+    content: &str,
+    lang: &str,
+    speaking_rate: f32,
+    audio_encoding: &str,
+) -> Result<impl serde::Serialize> {
+    let (lang, variant) = lang
+        .split_once(' ')
+        .ok_or_else(|| anyhow::anyhow!("{lang} cannot be parsed into lang and variant"))?;
 
-fn generate_google_json(content: &str, lang: &str, speaking_rate: f32, audio_encoding: &str) -> Result<impl serde::Serialize> {
-    let (lang, variant) = lang.split_once(' ').ok_or_else(||
-        anyhow::anyhow!("{lang} cannot be parsed into lang and variant")
-    )?;
-
-    Ok(
-        serde_json::json!({
-            "input": {
-                "text": content
-            },
-            "voice": {
-                "languageCode": lang,
-                "name": format!("{lang}-Standard-{variant}"),
-            },
-            "audioConfig": {
-                "audioEncoding": audio_encoding,
-                "speakingRate": speaking_rate
-            }
-        })
-    )
+    Ok(serde_json::json!({
+        "input": {
+            "text": content
+        },
+        "voice": {
+            "languageCode": lang,
+            "name": format!("{lang}-Standard-{variant}"),
+        },
+        "audioConfig": {
+            "audioEncoding": audio_encoding,
+            "speakingRate": speaking_rate
+        }
+    }))
 }
 
-fn generate_jwt(private_key_raw: String, client_email: &str, current_time: std::time::SystemTime) -> Result<(String, std::time::SystemTime)> {
+fn generate_jwt(
+    private_key_raw: String,
+    client_email: &str,
+    current_time: std::time::SystemTime,
+) -> Result<(String, std::time::SystemTime)> {
     let private_key = jsonwebtoken::EncodingKey::from_rsa_pem(private_key_raw.as_bytes())?;
 
     let mut headers = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
@@ -143,14 +159,18 @@ async fn refresh_jwt(state: &RwLock<State>) -> Result<String> {
     let current_time = std::time::SystemTime::now();
     let (expire_time, current_jwt_token, service_account) = {
         let state = state.read().await;
-        (state.expire_time, state.jwt_token.clone(), state.service_account.clone())
+        (
+            state.expire_time,
+            state.jwt_token.clone(),
+            state.service_account.clone(),
+        )
     };
 
-    if current_time > expire_time  {
+    if current_time > expire_time {
         let (jwt_token, new_expire_time) = generate_jwt(
             service_account.private_key.clone(),
             &service_account.client_email,
-            current_time
+            current_time,
         )?;
 
         let mut state = state.write().await;
@@ -166,8 +186,10 @@ async fn refresh_jwt(state: &RwLock<State>) -> Result<String> {
 
 pub async fn get_tts(
     state: &RwLock<State>,
-    text: &str, lang: &str,
-    speaking_rate: f32, preferred_format: Option<String>
+    text: &str,
+    lang: &str,
+    speaking_rate: f32,
+    preferred_format: Option<String>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
     let jwt_token = refresh_jwt(state).await?;
     let reqwest = state.read().await.reqwest.clone();
@@ -176,39 +198,56 @@ pub async fn get_tts(
         .and_then(|pf| AudioEncoding::from_str(&pf.to_uppercase()))
         .unwrap_or(AudioEncoding::OGG_OPUS);
 
-    let resp = reqwest.post(format!("{GOOGLE_API_BASE}v1/text:synthesize"))
-        .json(&generate_google_json(text, lang, speaking_rate, audio_encoding.as_str())?)
-        .header(reqwest::header::AUTHORIZATION, format!("Bearer {jwt_token}"))
-        .send().await?.error_for_status()?;
+    let resp = reqwest
+        .post(format!("{GOOGLE_API_BASE}v1/text:synthesize"))
+        .json(&generate_google_json(
+            text,
+            lang,
+            speaking_rate,
+            audio_encoding.as_str(),
+        )?)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {jwt_token}"),
+        )
+        .send()
+        .await?
+        .error_for_status()?;
 
     let resp_raw = resp.bytes().await?;
     let audio_response: AudioResponse = serde_json::from_slice(&resp_raw)?;
 
     Ok((
-        bytes::Bytes::from(base64::engine::general_purpose::STANDARD.decode(audio_response.audio_content)?),
-        Some(reqwest::header::HeaderValue::from_static(audio_encoding.content_type()))
+        bytes::Bytes::from(
+            base64::engine::general_purpose::STANDARD.decode(audio_response.audio_content)?,
+        ),
+        Some(reqwest::header::HeaderValue::from_static(
+            audio_encoding.content_type(),
+        )),
     ))
 }
-
 
 static VOICES: tokio::sync::OnceCell<Vec<GoogleVoice>> = tokio::sync::OnceCell::const_new();
 async fn _get_voices(state: &RwLock<State>) -> Result<Vec<GoogleVoice>> {
     #[derive(serde::Deserialize)]
     struct VoiceResponse {
-        voices: Vec<GoogleVoice>
+        voices: Vec<GoogleVoice>,
     }
 
     let jwt_token = refresh_jwt(state).await?;
     let reqwest = state.read().await.reqwest.clone();
 
-    let resp: VoiceResponse = reqwest.get(format!("{GOOGLE_API_BASE}v1/voices"))
+    let resp: VoiceResponse = reqwest
+        .get(format!("{GOOGLE_API_BASE}v1/voices"))
         .header("Authorization", format!("Bearer {jwt_token}"))
-        .send().await?.error_for_status()?
-        .json().await?;
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
 
     Ok(resp.voices)
 }
-
 
 pub async fn check_voice(state: &RwLock<State>, voice: &str) -> Result<bool> {
     Ok(get_voices(state).await?.iter().any(|s| s.as_str() == voice))
@@ -219,16 +258,23 @@ pub async fn get_raw_voices(state: &RwLock<State>) -> Result<&'static Vec<Google
 }
 
 pub async fn get_voices(state: &RwLock<State>) -> Result<Vec<String>> {
-    Ok(VOICES.get_or_try_init(|| _get_voices(state)).await?.iter().filter_map(|gvoice|  {
-        gvoice.name
-            .splitn(3, '-').nth(2)?
-            .split_once('-')
-            .filter(|(mode, _)| *mode == "Standard")
-            .map(|(_, variant)| {
-                let [mut language] = gvoice.languageCodes.clone();
-                language.push(' ');
-                language.push_str(variant);
-                language
-            })
-    }).collect())
+    Ok(VOICES
+        .get_or_try_init(|| _get_voices(state))
+        .await?
+        .iter()
+        .filter_map(|gvoice| {
+            gvoice
+                .name
+                .splitn(3, '-')
+                .nth(2)?
+                .split_once('-')
+                .filter(|(mode, _)| *mode == "Standard")
+                .map(|(_, variant)| {
+                    let [mut language] = gvoice.languageCodes.clone();
+                    language.push(' ');
+                    language.push_str(variant);
+                    language
+                })
+        })
+        .collect())
 }

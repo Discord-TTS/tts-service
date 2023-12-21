@@ -1,4 +1,4 @@
-use aws_sdk_polly::types::{LanguageCode, Engine, Gender, VoiceId, OutputFormat, TextType};
+use aws_sdk_polly::types::{Engine, Gender, LanguageCode, OutputFormat, TextType, VoiceId};
 use serde::ser::SerializeStruct;
 
 use crate::Result;
@@ -32,9 +32,24 @@ impl From<aws_sdk_polly::types::Voice> for VoiceLocal {
 impl serde::Serialize for VoiceLocal {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut state = serializer.serialize_struct("Voice", 7)?;
-        state.serialize_field("additional_language_codes", &self.additional_language_codes.as_ref().map(|v| v.iter().map(LanguageCode::as_str).collect::<Vec<&str>>()))?;
-        state.serialize_field("supported_engines", &self.supported_engines.as_ref().map(|v| v.iter().map(Engine::as_str).collect::<Vec<&str>>()))?;
-        state.serialize_field("language_code", &self.language_code.as_ref().map(LanguageCode::as_str))?;
+        state.serialize_field(
+            "additional_language_codes",
+            &self
+                .additional_language_codes
+                .as_ref()
+                .map(|v| v.iter().map(LanguageCode::as_str).collect::<Vec<&str>>()),
+        )?;
+        state.serialize_field(
+            "supported_engines",
+            &self
+                .supported_engines
+                .as_ref()
+                .map(|v| v.iter().map(Engine::as_str).collect::<Vec<&str>>()),
+        )?;
+        state.serialize_field(
+            "language_code",
+            &self.language_code.as_ref().map(LanguageCode::as_str),
+        )?;
         state.serialize_field("gender", &self.gender.as_ref().map(Gender::as_str))?;
         state.serialize_field("id", &self.id.as_ref().map(VoiceId::as_str))?;
         state.serialize_field("language_name", &self.language_name)?;
@@ -43,34 +58,46 @@ impl serde::Serialize for VoiceLocal {
     }
 }
 
-
 pub async fn get_tts(
     state: &State,
-    mut text: String, voice: &str,
-    speaking_rate: Option<u8>, preferred_format: Option<String>
+    mut text: String,
+    voice: &str,
+    speaking_rate: Option<u8>,
+    preferred_format: Option<String>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
     if let Some(speaking_rate) = speaking_rate {
         text = format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>");
     }
 
-    let resp = state.synthesize_speech()
-        .set_text_type(Some(if speaking_rate.is_some() {TextType::Ssml} else {TextType::Text}))
-        .set_output_format(preferred_format.and_then(|pf| match pf.to_lowercase().as_str() {
-            "mp3" => Some(OutputFormat::Mp3),
-            "pcm" => Some(OutputFormat::Pcm),
-            _ => None
-        }).or(Some(OutputFormat::OggVorbis)))
+    let resp = state
+        .synthesize_speech()
+        .set_text_type(Some(if speaking_rate.is_some() {
+            TextType::Ssml
+        } else {
+            TextType::Text
+        }))
+        .set_output_format(
+            preferred_format
+                .and_then(|pf| match pf.to_lowercase().as_str() {
+                    "mp3" => Some(OutputFormat::Mp3),
+                    "pcm" => Some(OutputFormat::Pcm),
+                    _ => None,
+                })
+                .or(Some(OutputFormat::OggVorbis)),
+        )
         .set_engine(Some(Engine::Standard))
         .set_voice_id(Some(voice.into()))
         .set_text(Some(text))
-        .send().await?;
+        .send()
+        .await?;
 
     Ok((
         resp.audio_stream.collect().await?.into_bytes(),
-        resp.content_type.map(TryInto::try_into).and_then(Result::ok)
+        resp.content_type
+            .map(TryInto::try_into)
+            .and_then(Result::ok),
     ))
 }
-
 
 static VOICES: tokio::sync::OnceCell<Vec<VoiceLocal>> = tokio::sync::OnceCell::const_new();
 async fn _get_voices(state: &State) -> Result<Vec<VoiceLocal>> {
@@ -78,13 +105,18 @@ async fn _get_voices(state: &State) -> Result<Vec<VoiceLocal>> {
     let mut next_token = None;
 
     loop {
-        let resp = state.describe_voices().set_next_token(next_token).send().await?;
+        let resp = state
+            .describe_voices()
+            .set_next_token(next_token)
+            .send()
+            .await?;
 
         if let Some(v) = resp.voices {
-            voices.extend(v.into_iter()
-                .map(VoiceLocal::from)
-                .filter(|v| v.supported_engines.as_ref().map_or(false, |engines| engines.contains(&Engine::Standard)))
-            );
+            voices.extend(v.into_iter().map(VoiceLocal::from).filter(|v| {
+                v.supported_engines
+                    .as_ref()
+                    .map_or(false, |engines| engines.contains(&Engine::Standard))
+            }));
         }
         if resp.next_token.is_none() {
             break Ok(voices);
@@ -94,23 +126,25 @@ async fn _get_voices(state: &State) -> Result<Vec<VoiceLocal>> {
     }
 }
 
-
 pub async fn check_voice(state: &State, voice: &str) -> Result<bool> {
-    VOICES.get_or_try_init(|| _get_voices(state)).await.map(|voices| 
-        voices.iter().any(|s| s.id == Some(voice.into()))
-    )
+    VOICES
+        .get_or_try_init(|| _get_voices(state))
+        .await
+        .map(|voices| voices.iter().any(|s| s.id == Some(voice.into())))
 }
 
 pub async fn get_voices(state: &State) -> Result<Vec<String>> {
     VOICES
-        .get_or_try_init(|| _get_voices(state)).await
-        .map(|voices| voices
-            .iter()
-            .filter_map(|v| v.id.as_ref())
-            .map(VoiceId::as_str)
-            .map(String::from)
-            .collect()
-        )
+        .get_or_try_init(|| _get_voices(state))
+        .await
+        .map(|voices| {
+            voices
+                .iter()
+                .filter_map(|v| v.id.as_ref())
+                .map(VoiceId::as_str)
+                .map(String::from)
+                .collect()
+        })
 }
 
 pub async fn get_raw_voices(state: &State) -> Result<&'static Vec<VoiceLocal>> {
