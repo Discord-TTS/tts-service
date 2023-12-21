@@ -1,7 +1,5 @@
 FROM lukemathwalker/cargo-chef:latest-rust-latest AS chef
 
-ARG MODES="espeak"
-
 WORKDIR /build
 
 # Container to generate a recipe.json
@@ -14,11 +12,11 @@ FROM chef AS builder
 
 # This is a dummy build to get the dependencies cached.
 COPY --from=planner /build/recipe.json recipe.json
-RUN cargo chef cook --release --no-default-features --features $MODES
+RUN cargo chef cook --release
 
 # This is the actual build, copy in the rest of the sources
 COPY . .
-RUN cargo build --release --no-default-features --features $MODES
+RUN cargo build --release
 
 # Now make the runtime container
 FROM debian:bullseye-slim
