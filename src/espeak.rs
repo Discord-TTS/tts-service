@@ -1,9 +1,12 @@
+use std::sync::OnceLock;
+
+use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
 
 use crate::Result;
 
-pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(bytes::Bytes, Option<axum::http::header::HeaderValue>)> {
-    if !VOICES.iter().any(|s| s.as_str() == voice) {
+pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(bytes::Bytes, Option<HeaderValue>)> {
+    if !check_voice(voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
 
@@ -78,7 +81,7 @@ pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<(byt
 
     Ok((
         bytes::Bytes::from(raw_wav),
-        Some(axum::http::header::HeaderValue::from_static("audio/wav"))
+        Some(HeaderValue::from_static("audio/wav"))
     ))
 }
 
@@ -92,15 +95,16 @@ pub fn check_length(audio: &[u8], max_length: u32) -> bool {
 }
 
 
-static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
-    || -> Result<_> {
+pub fn get_voices() -> &'static [String] {
+    static VOICES: OnceLock<Vec<String>> = OnceLock::new();
+    VOICES.get_or_init(|| (|| {
         let mut files = Vec::new();
         for file in std::fs::read_dir("/usr/local/share/espeak-ng-data/voices/mb")? {
             let file = file?;
             if file.file_type()?.is_file() {
                 let file_name = file.file_name().into_string().expect("Invalid filename!");
                 let mut file_name_iter = file_name.split('-').skip(1);
-
+    
                 if let Some(language) = file_name_iter.next() {
                     if file_name_iter.next().is_none() {
                         files.push(language.to_owned());
@@ -108,16 +112,12 @@ static VOICES: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|
                 }
             }
         };
-
+    
         files.sort();
-        Ok(files)
-    }().unwrap()
-});
-
-pub fn check_voice(voice: &str) -> bool {
-    VOICES.iter().any(|s| s.as_str() == voice)
+        anyhow::Ok(files)
+    })().unwrap())
 }
 
-pub fn get_voices() -> Vec<String> {
-    VOICES.iter().cloned().collect()
+pub fn check_voice(voice: &str) -> bool {
+    get_voices().iter().any(|s| s.as_str() == voice)
 }

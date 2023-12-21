@@ -1,5 +1,6 @@
+use std::sync::OnceLock;
+
 use itertools::Itertools;
-use once_cell::sync::Lazy;
 use rand::Rng;
 use tokio::sync::RwLock;
 
@@ -12,12 +13,15 @@ pub struct State {
     pub http: reqwest::Client
 }
 
-static BASE_URL: Lazy<reqwest::Url> = Lazy::new(|| {
-    reqwest::Url::parse("https://translate.google.com/translate_tts?ie=UTF-8&total=1&idx=0&client=tw-ob").unwrap()
-});
+fn get_base_url() -> reqwest::Url {
+    static BASE_URL: OnceLock<reqwest::Url> = OnceLock::new();
+    BASE_URL.get_or_init(|| {
+        reqwest::Url::parse("https://translate.google.com/translate_tts?ie=UTF-8&total=1&idx=0&client=tw-ob").unwrap()
+    }).clone()
+}
 
 fn parse_url(text: &str, lang: &str) -> reqwest::Url {
-    let mut url = BASE_URL.clone();
+    let mut url = get_base_url();
     url.query_pairs_mut()
         .append_pair("tl", lang)
         .append_pair("q", text)

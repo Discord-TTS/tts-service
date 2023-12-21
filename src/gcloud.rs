@@ -1,3 +1,4 @@
+use base64::Engine;
 use tokio::sync::RwLock;
 
 use crate::Result;
@@ -97,9 +98,9 @@ impl AudioEncoding {
 }
 
 
-fn generate_google_json(content: &str, lang: &str, speaking_rate: f32, audio_encoding: &str) -> Result<serde_json::Value> {
+fn generate_google_json(content: &str, lang: &str, speaking_rate: f32, audio_encoding: &str) -> Result<impl serde::Serialize> {
     let (lang, variant) = lang.split_once(' ').ok_or_else(||
-        anyhow::anyhow!("{} cannot be parsed into lang and variant", lang)
+        anyhow::anyhow!("{lang} cannot be parsed into lang and variant")
     )?;
 
     Ok(
@@ -184,7 +185,7 @@ pub async fn get_tts(
     let audio_response: AudioResponse = serde_json::from_slice(&resp_raw)?;
 
     Ok((
-        bytes::Bytes::from(base64::decode(audio_response.audio_content)?),
+        bytes::Bytes::from(base64::engine::general_purpose::STANDARD.decode(audio_response.audio_content)?),
         Some(reqwest::header::HeaderValue::from_static(audio_encoding.content_type()))
     ))
 }

@@ -4,12 +4,12 @@
 #[cfg(not(any(feature="gtts", feature="espeak", feature="gcloud", feature="polly")))]
 compile_error!("Either feature `gtts`, `espeak`, `gcloud`, `polly` must be enabled!");
 
-use std::{str::FromStr, fmt::Display, borrow::Cow};
+use std::{str::FromStr, fmt::Display, sync::OnceLock};
 
-use axum::{http::header::HeaderValue, response::Response};
-use once_cell::sync::OnceCell;
+use axum::{response::Response, http::header::HeaderValue};
+use bytes::Bytes;
+use deadpool_redis::redis::AsyncCommands;
 use sha2::Digest;
-use redis::AsyncCommands;
 use serde_json::to_value;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -63,7 +63,7 @@ async fn get_voices(
             #[cfg(feature="espeak")] TTSMode::eSpeak => to_value(espeak::get_voices()),
         }?} else {to_value(match mode {
             #[cfg(feature="gtts")]   TTSMode::gTTS   => gtts::get_voices(),
-            #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices(),
+            #[cfg(feature="espeak")] TTSMode::eSpeak => espeak::get_voices().to_vec(),
             #[cfg(feature="polly")]  TTSMode::Polly  => polly::get_voices(&state.polly).await?,
             #[cfg(feature="gcloud")] TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
         })?},
@@ -83,7 +83,7 @@ struct GetTTS {
 async fn get_tts(
     axum::extract::Query(payload): axum::extract::Query<GetTTS>,
     headers: axum::http::HeaderMap,
-) -> ResponseResult<Response<axum::body::Full<bytes::Bytes>>> {
+) -> ResponseResult<Response<axum::body::Body>> {
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
         if headers.get("Authorization").map(HeaderValue::to_str).transpose()? != Some(auth_key) {
@@ -123,7 +123,7 @@ async fn get_tts(
         let cached_audio = conn.get::<_, Option<String>>(&*cache_hash).await?
             .map(|enc| redis_state.key.decrypt(&enc))
             .transpose()?
-            .map(bytes::Bytes::from);
+            .map(Bytes::from);
 
         if let Some(cached_audio) = cached_audio {
             #[cfg(any(feature="gtts", feature="espeak"))]
@@ -170,15 +170,17 @@ enum TTSMode {
 }
 
 impl TTSMode {
-    fn into_response<T: bytes::Buf>(self, data: T, content_type: Option<HeaderValue>) -> ResponseResult<Response<axum::body::Full<T>>> {
+    #[allow(clippy::unused_self)]
+    fn into_response(self, data: Bytes, _: Option<reqwest::header::HeaderValue>) -> ResponseResult<Response> {
         Response::builder()
-            .header(axum::http::header::CONTENT_TYPE, content_type.unwrap_or_else(|| HeaderValue::from_static(match self {
-                #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
-                #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
-                #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus",
-                #[cfg(feature="polly")]   Self::Polly   => "audio/ogg",
-            })))
-            .body(axum::body::Full::new(data))
+            // TODO: Re-add when reqwest updates http to 1.0
+            // .header(axum::http::header::CONTENT_TYPE, content_type.unwrap_or_else(|| HeaderValue::from_static(match self {
+            //     #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
+            //     #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
+            //     #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus",
+            //     #[cfg(feature="polly")]   Self::Polly   => "audio/ogg",
+            // })))
+            .body(axum::body::Body::from(data))
             .map_err(Into::into)
     }
 
@@ -261,7 +263,7 @@ struct State {
     #[cfg(feature="gcloud")] gcloud: tokio::sync::RwLock<gcloud::State>
 }
 
-static STATE: OnceCell<State> = OnceCell::new();
+static STATE: OnceLock<State> = OnceLock::new();
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -305,15 +307,12 @@ async fn main() -> Result<()> {
             ])
         }));
 
-    let bind_to = std::env::var("BIND_ADDR").ok().map_or_else(
-        || Cow::Borrowed("0.0.0.0:3000"),
-        Cow::Owned
-    ).parse()?;
+    let env_addr = std::env::var("BIND_ADDR");
+    let bind_to = env_addr.as_deref().unwrap_or("0.0.0.0:3000");
 
     tracing::info!("Binding to {bind_to} {} redis enabled!", if redis_uri.is_some() {"with"} else {"without"});
-    axum::Server::bind(&bind_to)
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(async {drop(tokio::signal::ctrl_c().await)})
+    let listener = tokio::net::TcpListener::bind(bind_to).await?;
+    axum::serve(listener, app.into_make_service())
         .await?;
 
     Ok(())

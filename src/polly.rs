@@ -1,4 +1,4 @@
-use aws_sdk_polly::model::{LanguageCode, Engine, Gender, VoiceId, OutputFormat, TextType};
+use aws_sdk_polly::types::{LanguageCode, Engine, Gender, VoiceId, OutputFormat, TextType};
 use serde::ser::SerializeStruct;
 
 use crate::Result;
@@ -15,8 +15,8 @@ pub struct VoiceLocal {
     pub id: Option<VoiceId>,
 }
 
-impl From<aws_sdk_polly::model::Voice> for VoiceLocal {
-    fn from(v: aws_sdk_polly::model::Voice) -> Self {
+impl From<aws_sdk_polly::types::Voice> for VoiceLocal {
+    fn from(v: aws_sdk_polly::types::Voice) -> Self {
         Self {
             additional_language_codes: v.additional_language_codes,
             supported_engines: v.supported_engines,
@@ -48,7 +48,7 @@ pub async fn get_tts(
     state: &State,
     mut text: String, voice: &str,
     speaking_rate: Option<u8>, preferred_format: Option<String>
-) -> Result<(bytes::Bytes, Option<axum::http::header::HeaderValue>)> {
+) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
     if let Some(speaking_rate) = speaking_rate {
         text = format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>");
     }
