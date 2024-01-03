@@ -19,7 +19,7 @@ COPY . .
 RUN cargo build --release
 
 # Now make the runtime container
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y openssl ca-certificates git subversion make autoconf automake libtool pkg-config g++ && \
