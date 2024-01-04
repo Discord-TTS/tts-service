@@ -301,11 +301,17 @@ async fn main() -> Result<()> {
         .with(filter)
         .init();
 
+    let ip_block = match std::env::var("IPV6_BLOCK") {
+        Ok(ip_block) if &ip_block == "DISABLE" => None,
+        Ok(ip_block) => Some(ip_block.parse().expect("Invalid IPV6 Block!")),
+        _ => panic!("IPV6_BLOCK not set! Set to \"DISABLE\" to disable rate limit bypass"),
+    };
+
     let redis_uri = std::env::var("REDIS_URI").ok();
     let result = STATE.set(State {
         gcloud: gcloud::State::new(reqwest::Client::new())?,
-        gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6().await?),
         polly: polly::State::new(&aws_config::load_from_env().await),
+        gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
 
         auth_key: std::env::var("AUTH_KEY").ok(),
         redis: redis_uri.as_ref().map(|uri| {

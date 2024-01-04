@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use ipgen::IpNetwork;
 use itertools::Itertools;
 use rand::Rng;
 use tokio::sync::RwLock;
@@ -9,6 +10,7 @@ use crate::Result;
 #[derive(Clone)]
 pub struct State {
     ip: std::net::IpAddr,
+    ip_block: Option<IpNetwork>,
     pub http: reqwest::Client,
 }
 
@@ -34,16 +36,13 @@ fn parse_url(text: &str, lang: &str) -> reqwest::Url {
     url
 }
 
-pub async fn get_random_ipv6() -> Result<State> {
-    let ip_block = match std::env::var("IPV6_BLOCK") {
-        Ok(ip_block) if &ip_block == "DISABLE" => {
-            return Ok(State {
-                ip: "0.0.0.0".parse()?,
-                http: reqwest::Client::new(),
-            })
-        }
-        Ok(ip_block) => ip_block.parse().expect("Invalid IPV6 Block!"),
-        _ => panic!("IPV6_BLOCK not set! Set to \"DISABLE\" to disable rate limit bypass"),
+pub async fn get_random_ipv6(ip_block: Option<IpNetwork>) -> Result<State> {
+    let Some(ip_block) = ip_block else {
+        return Ok(State {
+            ip_block: None,
+            ip: "0.0.0.0".parse()?,
+            http: reqwest::Client::new(),
+        });
     };
 
     let mut attempts = 1;
@@ -65,7 +64,11 @@ pub async fn get_random_ipv6() -> Result<State> {
         let fail_reason = match is_block(check_request).await? {
             CheckResult::Ok(..) => {
                 tracing::warn!("Generated random IP: {ip}");
-                break Ok(State { ip, http });
+                break Ok(State {
+                    ip,
+                    http,
+                    ip_block: Some(ip_block),
+                });
             }
             CheckResult::NormalBlock => "429 block",
             CheckResult::TimeoutBlock => "timeout block",
@@ -132,7 +135,7 @@ pub async fn get_tts(
     for chunk in chunks {
         loop {
             let (ip, result) = {
-                let State { ip, http } = state.read().await.clone();
+                let State { ip, http, .. } = state.read().await.clone();
                 (ip, http.get(parse_url(&chunk, voice)).send().await)
             };
 
@@ -148,7 +151,7 @@ pub async fn get_tts(
             let mut state = state.write().await;
             if state.ip == ip {
                 tracing::warn!("IP {ip} has been blocked!");
-                *state = get_random_ipv6().await?;
+                *state = get_random_ipv6(state.ip_block).await?;
             }
         }
     }
