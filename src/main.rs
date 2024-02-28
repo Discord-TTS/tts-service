@@ -3,14 +3,11 @@
     clippy::unused_async,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    clippy::similar_names
 )]
 
-use std::{
-    fmt::{Display, Write as _},
-    str::FromStr,
-    sync::OnceLock,
-};
+use std::{fmt::Display, str::FromStr, sync::OnceLock};
 
 use axum::{http::header::HeaderValue, response::Response};
 use bytes::Bytes;
@@ -25,6 +22,7 @@ mod espeak;
 mod gcloud;
 mod gtts;
 mod polly;
+mod translation;
 
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
@@ -76,6 +74,8 @@ struct GetTTS {
     max_length: Option<u64>,
     #[serde(default)]
     preferred_format: Option<FixedString<u8>>,
+    #[serde(default)]
+    translation_lang: Option<FixedString<u8>>,
 }
 
 async fn get_tts(
@@ -94,6 +94,7 @@ async fn get_tts(
         }
     }
 
+    let translation_lang = payload.translation_lang;
     let preferred_format = payload.preferred_format;
     let speaking_rate = payload.speaking_rate;
     let mut voice = payload.voice;
@@ -103,13 +104,16 @@ async fn get_tts(
     mode.check_speaking_rate(speaking_rate)?;
     voice = mode.check_voice(state, voice).await?;
 
-    let mut cache_key = format!(
-        "{text} | {voice} | {mode} | {}",
-        speaking_rate.unwrap_or(0.0)
-    );
+    let mut cache_key = format!("{text} {voice} {mode} {}", speaking_rate.unwrap_or(0.0));
 
-    if let Some(preferred_format) = preferred_format.as_ref() {
-        write!(cache_key, "| {preferred_format}").unwrap();
+    if let Some(preferred_format) = &preferred_format {
+        cache_key.push(' ');
+        cache_key.push_str(preferred_format);
+    }
+
+    if let Some(translation_lang) = &translation_lang {
+        cache_key.push(' ');
+        cache_key.push_str(translation_lang);
     }
 
     tracing::debug!("Recieved request to TTS: {cache_key}");
@@ -139,6 +143,17 @@ async fn get_tts(
         Some((conn, &redis_state.key, cache_hash))
     } else {
         None
+    };
+
+    if let Some(translation_lang) = translation_lang {
+        text = translation::run(
+            state,
+            translation_url,
+            translation_token,
+            content,
+            target_lang,
+        )
+        .await
     };
 
     let (audio, content_type) = match mode {
@@ -282,7 +297,7 @@ struct RedisCache {
 }
 
 struct State {
-    auth_key: Option<String>,
+    auth_key: Option<FixedString<u8>>,
     redis: Option<RedisCache>,
     polly: polly::State,
     gtts: tokio::sync::RwLock<gtts::State>,
@@ -315,7 +330,11 @@ async fn main() -> Result<()> {
         polly: polly::State::new(&aws_config::load_from_env().await),
         gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
 
-        auth_key: std::env::var("AUTH_KEY").ok(),
+        auth_key: std::env::var("AUTH_KEY")
+            .ok()
+            .map(String::into_boxed_str)
+            .map(FixedString::try_from)
+            .map(|res| res.expect("auth key should be less than 256 chars long")),
         redis: redis_uri.as_ref().map(|uri| {
             let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
             RedisCache {
