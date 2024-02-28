@@ -189,7 +189,7 @@ pub async fn get_tts(
     text: &str,
     lang: &str,
     speaking_rate: f32,
-    preferred_format: Option<String>,
+    preferred_format: Option<&str>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
     let jwt_token = refresh_jwt(state).await?;
     let reqwest = state.read().await.reqwest.clone();

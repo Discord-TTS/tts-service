@@ -1684,6 +1684,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "small-fixed-array"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2782e69a974e738ea1ef568e884347d8174a41789fe459ee73517c8acf8c9ea5"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1979,6 +1988,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "small-fixed-array",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -1,5 +1,6 @@
 use aws_sdk_polly::types::{Engine, Gender, LanguageCode, OutputFormat, TextType, VoiceId};
 use serde::ser::SerializeStruct;
+use small_fixed_array::FixedString;
 
 use crate::Result;
 
@@ -60,14 +61,16 @@ impl serde::Serialize for VoiceLocal {
 
 pub async fn get_tts(
     state: &State,
-    mut text: String,
+    text: FixedString,
     voice: &str,
     speaking_rate: Option<u8>,
-    preferred_format: Option<String>,
+    preferred_format: Option<&str>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
-    if let Some(speaking_rate) = speaking_rate {
-        text = format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>");
-    }
+    let text = if let Some(speaking_rate) = speaking_rate {
+        format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>")
+    } else {
+        text.into_string()
+    };
 
     let resp = state
         .synthesize_speech()

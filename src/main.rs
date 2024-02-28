@@ -17,6 +17,7 @@ use bytes::Bytes;
 use deadpool_redis::redis::AsyncCommands;
 use serde_json::to_value;
 use sha2::Digest;
+use small_fixed_array::FixedString;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod espeak;
@@ -65,15 +66,15 @@ async fn get_voices(
 
 #[derive(serde::Deserialize)]
 struct GetTTS {
-    text: String,
+    text: FixedString,
     mode: TTSMode,
     #[serde(rename = "lang")]
-    voice: String,
+    voice: FixedString<u8>,
     #[serde(default)]
     speaking_rate: Option<f32>,
     max_length: Option<u64>,
     #[serde(default)]
-    preferred_format: Option<String>,
+    preferred_format: Option<FixedString<u8>>,
 }
 
 async fn get_tts(
@@ -150,7 +151,7 @@ async fn get_tts(
                 text,
                 &voice,
                 speaking_rate.map(|r| r as u8),
-                preferred_format,
+                preferred_format.as_deref(),
             )
             .await?
         }
@@ -160,7 +161,7 @@ async fn get_tts(
                 &text,
                 &voice,
                 speaking_rate.unwrap_or(0.0),
-                preferred_format,
+                preferred_format.as_deref(),
             )
             .await?
         }
@@ -210,11 +211,11 @@ impl TTSMode {
             .map_err(Into::into)
     }
 
-    #[cfg_attr(
-        not(feature = "polly"),
-        allow(unused_variables, clippy::unnecessary_wraps)
-    )]
-    async fn check_voice(self, state: &State, voice: String) -> ResponseResult<String> {
+    async fn check_voice(
+        self,
+        state: &State,
+        voice: FixedString<u8>,
+    ) -> ResponseResult<FixedString<u8>> {
         if match self {
             Self::gTTS => gtts::check_voice(&voice),
             Self::eSpeak => espeak::check_voice(&voice),
@@ -363,7 +364,7 @@ async fn main() -> Result<()> {
 #[derive(Debug)]
 enum Error {
     Unauthorized,
-    UnknownVoice(String),
+    UnknownVoice(FixedString<u8>),
     AudioTooLong,
     InvalidSpeakingRate(f32),
 
