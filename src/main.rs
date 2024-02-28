@@ -18,6 +18,7 @@ use deadpool_redis::redis::AsyncCommands;
 use serde_json::to_value;
 use sha2::Digest;
 use small_fixed_array::FixedString;
+use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod espeak;
@@ -292,10 +293,10 @@ static STATE: OnceLock<State> = OnceLock::new();
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let log_env = std::env::var("LOG_LEVEL");
+
     let fmt_layer = tracing_subscriber::fmt::layer();
-    let filter = tracing_subscriber::filter::LevelFilter::from_str(
-        &std::env::var("LOG_LEVEL").unwrap_or_else(|_| String::from("INFO")),
-    )?;
+    let filter = LevelFilter::from_str(log_env.as_deref().unwrap_or("INFO"))?;
 
     tracing_subscriber::registry()
         .with(fmt_layer)
