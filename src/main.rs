@@ -92,12 +92,12 @@ async fn get_tts(
     let translation_lang = payload.translation_lang;
     let preferred_format = payload.preferred_format;
     let speaking_rate = payload.speaking_rate;
-    let mut voice = payload.voice;
     let mut text = payload.text;
+    let voice = payload.voice;
     let mode = payload.mode;
 
     mode.check_speaking_rate(speaking_rate)?;
-    voice = mode.check_voice(state, voice).await?;
+    mode.check_voice(state, &voice).await?;
 
     let mut cache_key = format!("{text} {voice} {mode} {}", speaking_rate.unwrap_or(0.0));
 
@@ -216,20 +216,18 @@ impl TTSMode {
             .map_err(Into::into)
     }
 
-    async fn check_voice(
-        self,
-        state: &State,
-        voice: FixedString<u8>,
-    ) -> ResponseResult<FixedString<u8>> {
+    async fn check_voice(self, state: &State, voice: &str) -> ResponseResult<()> {
         if match self {
-            Self::gTTS => gtts::check_voice(&voice),
-            Self::eSpeak => espeak::check_voice(&voice),
-            Self::gCloud => gcloud::check_voice(&state.gcloud, &voice).await?,
-            Self::Polly => polly::check_voice(&state.polly, &voice).await?,
+            Self::gTTS => gtts::check_voice(voice),
+            Self::eSpeak => espeak::check_voice(voice),
+            Self::gCloud => gcloud::check_voice(&state.gcloud, voice).await?,
+            Self::Polly => polly::check_voice(&state.polly, voice).await?,
         } {
-            Ok(voice)
+            Ok(())
         } else {
-            Err(Error::UnknownVoice(voice))
+            Err(Error::UnknownVoice(
+                format!("Unknown voice: {voice}").into_boxed_str(),
+            ))
         }
     }
 
@@ -375,7 +373,7 @@ async fn main() -> Result<()> {
 enum Error {
     Unauthorized,
     TranslationDisabled,
-    UnknownVoice(FixedString<u8>),
+    UnknownVoice(Box<str>),
     AudioTooLong,
     InvalidSpeakingRate(f32),
 
@@ -393,7 +391,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::InvalidSpeakingRate(rate) => write!(f, "Invalid speaking rate: {rate}"),
             Self::AudioTooLong => f.write_str("Max length exceeded!"),
-            Self::UnknownVoice(voice) => write!(f, "Unknown voice: {voice}"),
+            Self::UnknownVoice(msg) => f.write_str(msg),
             Self::Unauthorized => write!(f, "Unauthorized request"),
             Self::TranslationDisabled => {
                 write!(f, "Translation requested but no key has been provided")
