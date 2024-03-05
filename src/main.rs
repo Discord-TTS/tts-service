@@ -8,7 +8,7 @@
 
 use std::{fmt::Display, str::FromStr, sync::OnceLock};
 
-use axum::{http::header::HeaderValue, response::Response};
+use axum::{http::header::HeaderValue, response::Response, routing::get, Json};
 use bytes::Bytes;
 use deadpool_redis::redis::AsyncCommands;
 use serde_json::to_value;
@@ -60,6 +60,18 @@ async fn get_voices(
             TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
         })?
     }))
+}
+
+async fn get_translation_languages() -> ResponseResult<Json<Vec<(FixedString, FixedString)>>> {
+    let state = STATE.get().unwrap();
+    let Some(token) = &state.translation_key else {
+        return Ok(Json(Vec::new()));
+    };
+
+    match translation::get_languages(&state.reqwest, token).await {
+        Ok(languages) => Ok(Json(languages)),
+        Err(err) => Err(Error::Unknown(err)),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -342,11 +354,12 @@ async fn main() -> Result<()> {
     }
 
     let app = axum::Router::new()
-        .route("/tts", axum::routing::get(get_tts))
-        .route("/voices", axum::routing::get(get_voices))
+        .route("/tts", get(get_tts))
+        .route("/voices", get(get_voices))
+        .route("/translation_languages", get(get_translation_languages))
         .route(
             "/modes",
-            axum::routing::get(|| async {
+            get(|| async {
                 axum::Json([
                     TTSMode::gTTS.to_string(),
                     TTSMode::Polly.to_string(),
