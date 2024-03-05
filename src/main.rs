@@ -320,6 +320,7 @@ async fn main() -> Result<()> {
 
     let client = reqwest::Client::new();
     let redis_uri = std::env::var("REDIS_URI").ok();
+    let has_redis_uri = redis_uri.is_some();
     let result = STATE.set(State {
         reqwest: client.clone(),
         gcloud: gcloud::State::new(client)?,
@@ -328,7 +329,7 @@ async fn main() -> Result<()> {
 
         auth_key: std::env::var("AUTH_KEY").ok().map(str_to_fixedstring),
         translation_key: std::env::var("DEEPL_KEY").ok().map(str_to_fixedstring),
-        redis: redis_uri.as_ref().map(|uri| {
+        redis: redis_uri.map(|uri| {
             let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
             RedisCache {
                 client: deadpool_redis::Config::from_url(uri)
@@ -362,11 +363,7 @@ async fn main() -> Result<()> {
 
     tracing::info!(
         "Binding to {bind_to} {} redis enabled!",
-        if redis_uri.is_some() {
-            "with"
-        } else {
-            "without"
-        }
+        if has_redis_uri { "with" } else { "without" }
     );
 
     let listener = tokio::net::TcpListener::bind(bind_to).await?;
