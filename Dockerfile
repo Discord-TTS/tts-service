@@ -24,7 +24,7 @@ FROM debian:bookworm-slim AS runtime
 COPY sparse-checkout.sh .
 
 RUN apt-get update && apt-get upgrade -y && \
-    apt-get install -y openssl ca-certificates git subversion make autoconf automake libtool pkg-config g++ && \
+    apt-get install -y openssl ca-certificates git make autoconf automake libtool pkg-config g++ && \
     apt-get clean && \
     # Build and install espeak-ng
     git clone https://github.com/espeak-ng/espeak-ng --depth 1 && cd espeak-ng && \
