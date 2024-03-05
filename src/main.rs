@@ -115,11 +115,7 @@ async fn get_tts(
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
     let redis_info = if let Some(redis_state) = &state.redis {
-        let cache_hash = {
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(&cache_key);
-            hasher.finalize()
-        };
+        let cache_hash = sha2::Sha256::digest(&cache_key);
 
         let mut conn = redis_state.client.get().await?;
         let cached_audio = conn
