@@ -1,6 +1,5 @@
 #![warn(clippy::pedantic)]
 #![allow(
-    clippy::unused_async,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_lossless,
@@ -238,7 +237,6 @@ impl TTSMode {
         }
     }
 
-    #[allow(unused_variables)]
     fn check_length(self, audio: &[u8], max_length: Option<u64>) -> ResponseResult<()> {
         if max_length.map_or(true, |max_length| match self {
             Self::gTTS => check_mp3_length(audio, max_length),
@@ -263,7 +261,6 @@ impl TTSMode {
         Ok(())
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     const fn max_speaking_rate(self) -> Option<f32> {
         match self {
             Self::gTTS => None,
