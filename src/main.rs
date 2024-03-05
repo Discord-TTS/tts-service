@@ -3,21 +3,18 @@
     clippy::unused_async,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    clippy::similar_names
 )]
 
-use std::{
-    fmt::{Display, Write as _},
-    str::FromStr,
-    sync::OnceLock,
-};
+use std::{fmt::Display, str::FromStr, sync::OnceLock};
 
 use axum::{http::header::HeaderValue, response::Response};
 use bytes::Bytes;
 use deadpool_redis::redis::AsyncCommands;
 use serde_json::to_value;
 use sha2::Digest;
-use small_fixed_array::FixedString;
+use small_fixed_array::{FixedString, ValidLength};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -25,6 +22,7 @@ mod espeak;
 mod gcloud;
 mod gtts;
 mod polly;
+mod translation;
 
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
@@ -76,6 +74,8 @@ struct GetTTS {
     max_length: Option<u64>,
     #[serde(default)]
     preferred_format: Option<FixedString<u8>>,
+    #[serde(default)]
+    translation_lang: Option<FixedString<u8>>,
 }
 
 async fn get_tts(
@@ -94,22 +94,26 @@ async fn get_tts(
         }
     }
 
+    let translation_lang = payload.translation_lang;
     let preferred_format = payload.preferred_format;
     let speaking_rate = payload.speaking_rate;
     let mut voice = payload.voice;
+    let mut text = payload.text;
     let mode = payload.mode;
-    let text = payload.text;
 
     mode.check_speaking_rate(speaking_rate)?;
     voice = mode.check_voice(state, voice).await?;
 
-    let mut cache_key = format!(
-        "{text} | {voice} | {mode} | {}",
-        speaking_rate.unwrap_or(0.0)
-    );
+    let mut cache_key = format!("{text} {voice} {mode} {}", speaking_rate.unwrap_or(0.0));
 
-    if let Some(preferred_format) = preferred_format.as_ref() {
-        write!(cache_key, "| {preferred_format}").unwrap();
+    if let Some(preferred_format) = &preferred_format {
+        cache_key.push(' ');
+        cache_key.push_str(preferred_format);
+    }
+
+    if let Some(translation_lang) = &translation_lang {
+        cache_key.push(' ');
+        cache_key.push_str(translation_lang);
     }
 
     tracing::debug!("Recieved request to TTS: {cache_key}");
@@ -122,19 +126,28 @@ async fn get_tts(
             .get::<_, Option<String>>(&*cache_hash)
             .await?
             .map(|enc| redis_state.key.decrypt(&enc))
-            .transpose()?
-            .map(Bytes::from);
+            .transpose()?;
 
         if let Some(cached_audio) = cached_audio {
             mode.check_length(&cached_audio, payload.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
-            return mode.into_response(cached_audio, None);
+            return mode.into_response(cached_audio.into(), None);
         }
 
         Some((conn, &redis_state.key, cache_hash))
     } else {
         None
+    };
+
+    if let Some(language) = translation_lang {
+        let Some(token) = &state.translation_key else {
+            return Err(Error::TranslationDisabled);
+        };
+
+        if let Some(translated) = translation::run(&state.reqwest, token, &text, &language).await? {
+            text = translated;
+        }
     };
 
     let (audio, content_type) = match mode {
@@ -278,7 +291,10 @@ struct RedisCache {
 }
 
 struct State {
-    auth_key: Option<String>,
+    auth_key: Option<FixedString<u8>>,
+    translation_key: Option<FixedString<u8>>,
+    reqwest: reqwest::Client,
+
     redis: Option<RedisCache>,
     polly: polly::State,
     gtts: tokio::sync::RwLock<gtts::State>,
@@ -286,6 +302,10 @@ struct State {
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
+
+fn str_to_fixedstring<LenT: ValidLength>(str: String) -> FixedString<LenT> {
+    FixedString::try_from(str.into_boxed_str()).expect("string should be less than 256 chars long")
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -305,13 +325,16 @@ async fn main() -> Result<()> {
         _ => panic!("IPV6_BLOCK not set! Set to \"DISABLE\" to disable rate limit bypass"),
     };
 
+    let client = reqwest::Client::new();
     let redis_uri = std::env::var("REDIS_URI").ok();
     let result = STATE.set(State {
-        gcloud: gcloud::State::new(reqwest::Client::new())?,
+        reqwest: client.clone(),
+        gcloud: gcloud::State::new(client)?,
         polly: polly::State::new(&aws_config::load_from_env().await),
         gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
 
-        auth_key: std::env::var("AUTH_KEY").ok(),
+        auth_key: std::env::var("AUTH_KEY").ok().map(str_to_fixedstring),
+        translation_key: std::env::var("DEEPL_KEY").ok().map(str_to_fixedstring),
         redis: redis_uri.as_ref().map(|uri| {
             let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
             RedisCache {
@@ -361,6 +384,7 @@ async fn main() -> Result<()> {
 #[derive(Debug)]
 enum Error {
     Unauthorized,
+    TranslationDisabled,
     UnknownVoice(FixedString<u8>),
     AudioTooLong,
     InvalidSpeakingRate(f32),
@@ -381,6 +405,9 @@ impl std::fmt::Display for Error {
             Self::AudioTooLong => f.write_str("Max length exceeded!"),
             Self::UnknownVoice(voice) => write!(f, "Unknown voice: {voice}"),
             Self::Unauthorized => write!(f, "Unauthorized request"),
+            Self::TranslationDisabled => {
+                write!(f, "Translation requested but no key has been provided")
+            }
             Self::Unknown(e) => write!(f, "Unknown error: {e}"),
         }
     }
@@ -395,16 +422,17 @@ impl axum::response::IntoResponse for Error {
         let json_err = serde_json::json!({
             "display": self.to_string(),
             "code": match self {
+                Self::TranslationDisabled => 5,
                 Self::Unauthorized => 4,
-                Self::InvalidSpeakingRate(_) => 3_u8,
+                Self::InvalidSpeakingRate(_) => 3,
                 Self::AudioTooLong => 2,
                 Self::UnknownVoice(_) => 1,
-                Self::Unknown(_) => 0,
+                Self::Unknown(_) => 0_u8,
             },
         });
 
         let status = match self {
-            Self::AudioTooLong | Self::InvalidSpeakingRate(_) => {
+            Self::AudioTooLong | Self::InvalidSpeakingRate(_) | Self::TranslationDisabled => {
                 axum::http::StatusCode::BAD_REQUEST
             }
             Self::Unknown(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
