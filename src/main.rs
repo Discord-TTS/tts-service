@@ -275,16 +275,29 @@ impl TTSMode {
             Self::gCloud => Some(4.0),
         }
     }
-}
 
-impl Display for TTSMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+    fn as_str(self) -> &'static str {
+        match self {
             Self::gTTS => "gTTS",
             Self::Polly => "Polly",
             Self::eSpeak => "eSpeak",
             Self::gCloud => "gCloud",
-        })
+        }
+    }
+}
+
+impl Display for TTSMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl serde::Serialize for TTSMode {
+    fn serialize<S>(&self, serializer: S) -> std::prelude::v1::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -361,10 +374,10 @@ async fn main() -> Result<()> {
             "/modes",
             get(|| async {
                 axum::Json([
-                    TTSMode::gTTS.to_string(),
-                    TTSMode::Polly.to_string(),
-                    TTSMode::eSpeak.to_string(),
-                    TTSMode::gCloud.to_string(),
+                    TTSMode::gTTS,
+                    TTSMode::Polly,
+                    TTSMode::eSpeak,
+                    TTSMode::gCloud,
                 ])
             }),
         );
