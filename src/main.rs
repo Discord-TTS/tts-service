@@ -83,12 +83,8 @@ async fn get_tts(
 ) -> ResponseResult<Response<axum::body::Body>> {
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
-        if headers
-            .get("Authorization")
-            .map(HeaderValue::to_str)
-            .transpose()?
-            != Some(auth_key)
-        {
+        let auth_header = headers.get("Authorization");
+        if auth_header.map(HeaderValue::to_str).transpose()? != Some(auth_key) {
             return Err(Error::Unauthorized);
         }
     }
