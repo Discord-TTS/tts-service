@@ -21,6 +21,8 @@ RUN cargo build --release
 # Now make the runtime container
 FROM debian:bookworm-slim AS runtime
 
+COPY sparse-checkout.sh .
+
 RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y openssl ca-certificates git subversion make autoconf automake libtool pkg-config g++ && \
     apt-get clean && \
@@ -31,7 +33,7 @@ RUN apt-get update && apt-get upgrade -y && \
     # Build and install mbrola
     git clone https://github.com/numediart/MBROLA --depth 1 && cd MBROLA && make && cp Bin/mbrola /usr/bin/mbrola && cd .. && rm -rf MBROLA && \
     # Download the mbrola voices to /usr/share/mbrola.
-    svn export https://github.com/numediart/MBROLA-voices/trunk/data /usr/share/mbrola
+    ./sparse-checkout.sh https://github.com/numediart/MBROLA-voices /usr/share/mbrola && mv /usr/share/mbrola/data/* /usr/share/mbrola && rm -r /usr/share/mbrola/data
 
 # Download tini to avoid zombie processes
 ADD https://github.com/krallin/tini/releases/latest/download/tini /usr/local/bin/tini
