@@ -120,6 +120,5 @@ pub async fn get_languages(
         .map(|v| (v.language, v.name))
         .collect();
 
-    println!("Loaded DeepL translation languages");
     Ok(language_map)
 }
