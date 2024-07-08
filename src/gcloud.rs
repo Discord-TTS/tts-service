@@ -175,7 +175,7 @@ async fn refresh_jwt(state: &RwLock<State>) -> Result<String> {
 
         let mut state = state.write().await;
 
-        state.jwt_token = jwt_token.clone();
+        state.jwt_token.clone_from(&jwt_token);
         state.expire_time = new_expire_time;
 
         Ok(jwt_token)
