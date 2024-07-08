@@ -139,7 +139,7 @@ async fn get_tts(
             mode.check_length(&cached_audio, payload.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
-            return mode.into_response(cached_audio.into(), None);
+            return Ok(mode.into_response(cached_audio.into(), None));
         }
 
         Some((conn, &redis_state.key, cache_hash))
@@ -197,7 +197,7 @@ async fn get_tts(
     };
 
     mode.check_length(&audio, payload.max_length)?;
-    mode.into_response(audio, content_type)
+    Ok(mode.into_response(audio, content_type))
 }
 
 #[derive(serde::Deserialize, Clone, Copy, Debug)]
@@ -210,22 +210,25 @@ enum TTSMode {
 }
 
 impl TTSMode {
-    #[allow(clippy::unused_self)]
     fn into_response(
         self,
         data: Bytes,
-        _: Option<reqwest::header::HeaderValue>,
-    ) -> ResponseResult<Response> {
+        content_type: Option<reqwest::header::HeaderValue>,
+    ) -> Response {
         Response::builder()
-            // TODO: Re-add when reqwest updates http to 1.0
-            // .header(axum::http::header::CONTENT_TYPE, content_type.unwrap_or_else(|| HeaderValue::from_static(match self {
-            //     #[cfg(feature="gtts")]    Self::gTTS    => "audio/mpeg",
-            //     #[cfg(feature="espeak")]  Self::eSpeak  => "audio/wav",
-            //     #[cfg(feature="gcloud")]  Self::gCloud  => "audio/opus",
-            //     #[cfg(feature="polly")]   Self::Polly   => "audio/ogg",
-            // })))
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                content_type.unwrap_or_else(|| {
+                    HeaderValue::from_static(match self {
+                        Self::gTTS => "audio/mpeg",
+                        Self::eSpeak => "audio/wav",
+                        Self::gCloud => "audio/opus",
+                        Self::Polly => "audio/ogg",
+                    })
+                }),
+            )
             .body(axum::body::Body::from(data))
-            .map_err(Into::into)
+            .unwrap()
     }
 
     async fn check_voice(self, state: &State, voice: &str) -> ResponseResult<()> {
