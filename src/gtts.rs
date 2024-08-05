@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use aformat::ToArrayString;
 use ipgen::IpNetwork;
 use itertools::Itertools;
 use rand::Rng;
@@ -31,7 +32,7 @@ fn parse_url(text: &str, lang: &str) -> reqwest::Url {
     url.query_pairs_mut()
         .append_pair("tl", lang)
         .append_pair("q", text)
-        .append_pair("textlen", &text.len().to_string())
+        .append_pair("textlen", &text.len().to_arraystring())
         .finish();
     url
 }

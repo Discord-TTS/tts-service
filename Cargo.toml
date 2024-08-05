@@ -23,6 +23,7 @@ itertools = "0.13"
 aws-sdk-polly = "1.7.0"
 small-fixed-array = { version = "0.4.0", features = ["serde"] }
 memchr = "2.7.4"
+aformat = "0.1.4"
 
 [dependencies.fernet]
 version = "0.2"

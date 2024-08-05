@@ -1,5 +1,6 @@
 use std::sync::{LazyLock, OnceLock};
 
+use aformat::{aformat, CapStr, ToArrayString};
 use memchr::memmem::Finder;
 use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
@@ -25,6 +26,7 @@ pub async fn get_tts(
         anyhow::bail!("Invalid voice: {voice}");
     }
 
+    let voice = CapStr::<8>(voice);
     let Finders {
         repeat_err,
         replaced_with_err,
@@ -41,9 +43,9 @@ pub async fn get_tts(
                 "--pho",
                 "-q",
                 "-s",
-                &speaking_rate.to_string(),
+                &speaking_rate.to_arraystring(),
                 "-v",
-                &format!("mb/mb-{voice}"),
+                &aformat!("mb/mb-{voice}"),
                 text,
             ])
             .spawn()?;
@@ -59,7 +61,7 @@ pub async fn get_tts(
             .stdin(espeak_stdout)
             .args([
                 "-e",
-                &format!("/usr/share/mbrola/{voice}/{voice}"),
+                &aformat!("/usr/share/mbrola/{voice}/{voice}"),
                 "-",
                 "-.wav",
             ])
