@@ -1,9 +1,20 @@
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
+use memchr::memmem::Finder;
 use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
 
 use crate::Result;
+
+struct Finders {
+    replaced_with_err: Finder<'static>,
+    repeat_err: Finder<'static>,
+}
+
+static MBROLA_ERR_FINDERS: LazyLock<Finders> = LazyLock::new(|| Finders {
+    replaced_with_err: Finder::new(b"unknown, replaced with"),
+    repeat_err: Finder::new(b"mbrowrap error: unable to get .wav header from mbrola"),
+});
 
 pub async fn get_tts(
     text: &str,
@@ -14,8 +25,14 @@ pub async fn get_tts(
         anyhow::bail!("Invalid voice: {voice}");
     }
 
+    let Finders {
+        repeat_err,
+        replaced_with_err,
+    } = &*MBROLA_ERR_FINDERS;
+
     // We have to loop due to random "unable to get .wav header" errors.
     let mut i = 1;
+    let mut stderr_buf = Vec::new();
     let mut raw_wav = loop {
         let espeak_process = tokio::process::Command::new("espeak")
             .stdout(std::process::Stdio::piped())
@@ -57,10 +74,8 @@ pub async fn get_tts(
                         break;
                     }
 
-                    let current_msg =
-                        std::str::from_utf8(&buffer).unwrap_or("TTS Service Error: Invalid UTF8");
-                    if !current_msg.contains("unknown, replaced with ") {
-                        tracing::error!("Mbrola Error: {current_msg}");
+                    if replaced_with_err.find(&buffer).is_none() {
+                        tracing::error!("Mbrola Error: {}", String::from_utf8_lossy(&buffer));
                     }
 
                     buffer.clear();
@@ -74,13 +89,10 @@ pub async fn get_tts(
         if output.stdout.len() == 44 {
             let mut espeak_stderr = stderr.expect("Unable to open espeak stderr");
 
-            let mut stderr = Vec::new();
-            espeak_stderr.read_to_end(&mut stderr).await?;
+            stderr_buf.clear();
+            espeak_stderr.read_to_end(&mut stderr_buf).await?;
 
-            if std::str::from_utf8(&stderr)
-                .unwrap()
-                .contains("mbrowrap error: unable to get .wav header from mbrola")
-            {
+            if repeat_err.find(&stderr_buf).is_some() {
                 i += 1;
                 continue;
             }

@@ -2132,6 +2132,7 @@ dependencies = [
  "ipgen",
  "itertools",
  "jsonwebtoken",
+ "memchr",
  "mp3-duration",
  "rand",
  "redis 0.26.1",
