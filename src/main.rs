@@ -132,7 +132,7 @@ async fn get_tts(
         tracing::debug!("Recieved request to TTS: {payload:?}");
     }
 
-    let _guard = DeadlineMonitor::new(Duration::from_millis(500), |took| {
+    let _guard = DeadlineMonitor::new(Duration::from_millis(5000), |took| {
         tracing::warn!("get_tts took {} millis!", took.as_millis());
     });
 
@@ -169,7 +169,7 @@ async fn get_tts(
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
     let redis_info = if let Some(redis_state) = &state.redis {
-        let _guard = DeadlineMonitor::new(Duration::from_millis(50), |took| {
+        let _guard = DeadlineMonitor::new(Duration::from_millis(100), |took| {
             tracing::warn!("Fetching from redis took {} millis!", took.as_millis());
         });
 
@@ -199,7 +199,7 @@ async fn get_tts(
             return Err(Error::TranslationDisabled);
         };
 
-        let _guard = DeadlineMonitor::new(Duration::from_millis(50), |took| {
+        let _guard = DeadlineMonitor::new(Duration::from_millis(200), |took| {
             tracing::warn!("Fetching translation took {} millis!", took.as_millis());
         });
 
@@ -237,7 +237,7 @@ async fn get_tts(
 
     tracing::debug!("Generated TTS from {cache_key}");
     if let Some((mut redis_conn, key, cache_hash)) = redis_info {
-        let _guard = DeadlineMonitor::new(Duration::from_millis(50), |took| {
+        let _guard = DeadlineMonitor::new(Duration::from_millis(100), |took| {
             tracing::warn!("Caching audio result took {} millis!", took.as_millis());
         });
 
