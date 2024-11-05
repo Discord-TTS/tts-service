@@ -128,7 +128,7 @@ pub async fn get_tts(
     voice: &str,
     hit_any_deadline: Arc<AtomicBool>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
-    let _guard = DeadlineMonitor::new(Duration::from_millis(1000), hit_any_deadline, |took| {
+    let _guard = DeadlineMonitor::new(Duration::from_millis(3000), hit_any_deadline, |took| {
         tracing::warn!("Fetching gTTS audio took {} millis!", took.as_millis());
     });
 
