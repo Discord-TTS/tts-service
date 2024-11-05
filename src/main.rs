@@ -9,7 +9,10 @@
 use std::{
     fmt::Display,
     str::FromStr,
-    sync::OnceLock,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    },
     time::{Duration, Instant},
 };
 
@@ -38,15 +41,17 @@ pub fn check_mp3_length(audio: &[u8], max_length: u64) -> bool {
 }
 
 pub struct DeadlineMonitor<F: FnOnce(Duration)> {
-    expected: Duration,
     start: Instant,
+    expected: Duration,
     on_not_hit: Option<F>,
+    hit_any_deadline: Arc<AtomicBool>,
 }
 
 impl<F: FnOnce(Duration)> DeadlineMonitor<F> {
-    pub fn new(expected: Duration, on_not_hit: F) -> Self {
+    pub fn new(expected: Duration, hit_any_deadline: Arc<AtomicBool>, on_not_hit: F) -> Self {
         Self {
             expected,
+            hit_any_deadline,
             start: Instant::now(),
             on_not_hit: Some(on_not_hit),
         }
@@ -60,7 +65,7 @@ impl<F: FnOnce(Duration)> Drop for DeadlineMonitor<F> {
             return;
         };
 
-        if time_passed > self.expected {
+        if time_passed > self.expected && !self.hit_any_deadline.swap(true, Ordering::Relaxed) {
             (self.on_not_hit.take().unwrap())(time_passed);
         }
     }
@@ -132,9 +137,14 @@ async fn get_tts(
         tracing::debug!("Recieved request to TTS: {payload:?}");
     }
 
-    let _guard = DeadlineMonitor::new(Duration::from_millis(5000), |took| {
-        tracing::warn!("get_tts took {} millis!", took.as_millis());
-    });
+    let hit_any_deadline = Arc::new(AtomicBool::new(false));
+    let _guard = DeadlineMonitor::new(
+        Duration::from_millis(5000),
+        hit_any_deadline.clone(),
+        |took| {
+            tracing::warn!("get_tts took {} millis!", took.as_millis());
+        },
+    );
 
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
@@ -169,9 +179,13 @@ async fn get_tts(
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
     let redis_info = if let Some(redis_state) = &state.redis {
-        let _guard = DeadlineMonitor::new(Duration::from_millis(100), |took| {
-            tracing::warn!("Fetching from redis took {} millis!", took.as_millis());
-        });
+        let _guard = DeadlineMonitor::new(
+            Duration::from_millis(100),
+            hit_any_deadline.clone(),
+            |took| {
+                tracing::warn!("Fetching from redis took {} millis!", took.as_millis());
+            },
+        );
 
         let cache_hash = sha2::Sha256::digest(&cache_key);
 
@@ -199,9 +213,13 @@ async fn get_tts(
             return Err(Error::TranslationDisabled);
         };
 
-        let _guard = DeadlineMonitor::new(Duration::from_millis(200), |took| {
-            tracing::warn!("Fetching translation took {} millis!", took.as_millis());
-        });
+        let _guard = DeadlineMonitor::new(
+            Duration::from_millis(200),
+            hit_any_deadline.clone(),
+            |took| {
+                tracing::warn!("Fetching translation took {} millis!", took.as_millis());
+            },
+        );
 
         if let Some(translated) = translation::run(&state.reqwest, token, &text, &language).await? {
             text = translated;
@@ -209,7 +227,9 @@ async fn get_tts(
     };
 
     let (audio, content_type) = match mode {
-        TTSMode::gTTS => gtts::get_tts(&state.gtts, &text, &voice).await?,
+        TTSMode::gTTS => {
+            gtts::get_tts(&state.gtts, &text, &voice, hit_any_deadline.clone()).await?
+        }
         TTSMode::eSpeak => {
             espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?
         }
@@ -237,9 +257,13 @@ async fn get_tts(
 
     tracing::debug!("Generated TTS from {cache_key}");
     if let Some((mut redis_conn, key, cache_hash)) = redis_info {
-        let _guard = DeadlineMonitor::new(Duration::from_millis(100), |took| {
-            tracing::warn!("Caching audio result took {} millis!", took.as_millis());
-        });
+        let _guard = DeadlineMonitor::new(
+            Duration::from_millis(100),
+            hit_any_deadline.clone(),
+            |took| {
+                tracing::warn!("Caching audio result took {} millis!", took.as_millis());
+            },
+        );
 
         if let Err(err) = redis_conn
             .set::<_, _, ()>(&*cache_hash, key.encrypt(&audio))

@@ -1,4 +1,7 @@
-use std::{sync::OnceLock, time::Duration};
+use std::{
+    sync::{atomic::AtomicBool, Arc, OnceLock},
+    time::Duration,
+};
 
 use aformat::ToArrayString;
 use ipgen::IpNetwork;
@@ -123,8 +126,9 @@ pub async fn get_tts(
     state: &RwLock<State>,
     text: &str,
     voice: &str,
+    hit_any_deadline: Arc<AtomicBool>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
-    let _guard = DeadlineMonitor::new(Duration::from_millis(1000), |took| {
+    let _guard = DeadlineMonitor::new(Duration::from_millis(1000), hit_any_deadline, |took| {
         tracing::warn!("Fetching gTTS audio took {} millis!", took.as_millis());
     });
 
