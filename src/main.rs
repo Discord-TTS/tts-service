@@ -1,6 +1,7 @@
 #![warn(clippy::pedantic)]
 #![allow(
     clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
     clippy::cast_sign_loss,
     clippy::cast_lossless,
     clippy::similar_names
@@ -18,9 +19,11 @@ use std::{
 
 use axum::{http::header::HeaderValue, response::Response, routing::get, Json};
 use bytes::Bytes;
-use deadpool_redis::redis::AsyncCommands;
 use serde_json::to_value;
-use sha2::Digest;
+use sha2::{
+    digest::{consts::U32, generic_array::GenericArray},
+    Digest,
+};
 use small_fixed_array::{FixedString, ValidLength};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -33,6 +36,7 @@ mod translation;
 
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
+type AudioCacheDigest = GenericArray<u8, U32>;
 
 #[must_use]
 pub fn check_mp3_length(audio: &[u8], max_length: u64) -> bool {
@@ -178,34 +182,27 @@ async fn get_tts(
 
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
-    let redis_info = if let Some(redis_state) = &state.redis {
+    let cache_hash = {
         let _guard = DeadlineMonitor::new(
-            Duration::from_millis(100),
+            Duration::from_millis(50),
             hit_any_deadline.clone(),
             |took| {
-                tracing::warn!("Fetching from redis took {} millis!", took.as_millis());
+                tracing::warn!(
+                    "Fetching from audio cache took {} millis!",
+                    took.as_millis()
+                );
             },
         );
 
         let cache_hash = sha2::Sha256::digest(&cache_key);
-
-        let mut conn = redis_state.client.get().await?;
-        let cached_audio = conn
-            .get::<_, Option<String>>(&*cache_hash)
-            .await?
-            .map(|enc| redis_state.key.decrypt(&enc))
-            .transpose()?;
-
-        if let Some(cached_audio) = cached_audio {
+        if let Some(cached_audio) = state.cache.get(&cache_hash) {
             mode.check_length(&cached_audio, payload.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
-            return Ok(mode.into_response(cached_audio.into(), None));
+            return Ok(mode.into_response(cached_audio, None));
         }
 
-        Some((conn, &redis_state.key, cache_hash))
-    } else {
-        None
+        cache_hash
     };
 
     if let Some(language) = translation_lang {
@@ -256,23 +253,17 @@ async fn get_tts(
     };
 
     tracing::debug!("Generated TTS from {cache_key}");
-    if let Some((mut redis_conn, key, cache_hash)) = redis_info {
+    {
         let _guard = DeadlineMonitor::new(
-            Duration::from_millis(100),
+            Duration::from_millis(50),
             hit_any_deadline.clone(),
             |took| {
                 tracing::warn!("Caching audio result took {} millis!", took.as_millis());
             },
         );
 
-        if let Err(err) = redis_conn
-            .set::<_, _, ()>(&*cache_hash, key.encrypt(&audio))
-            .await
-        {
-            tracing::error!("Failed to cache: {err}");
-        } else {
-            tracing::debug!("Cached TTS from {cache_key}");
-        };
+        tracing::debug!("Cached {} kb of audio", (audio.len() as f64) / 1024.0);
+        state.cache.insert(cache_hash, audio.clone());
     };
 
     mode.check_length(&audio, payload.max_length)?;
@@ -383,17 +374,13 @@ impl serde::Serialize for TTSMode {
     }
 }
 
-struct RedisCache {
-    client: deadpool_redis::Pool,
-    key: fernet::Fernet,
-}
-
 struct State {
     auth_key: Option<FixedString<u8>>,
     translation_key: Option<FixedString<u8>>,
     reqwest: reqwest::Client,
 
-    redis: Option<RedisCache>,
+    cache: mini_moka::sync::Cache<AudioCacheDigest, Bytes>,
+
     polly: polly::State,
     gtts: tokio::sync::RwLock<gtts::State>,
     gcloud: tokio::sync::RwLock<gcloud::State>,
@@ -424,26 +411,30 @@ async fn main() -> Result<()> {
     };
 
     let client = reqwest::Client::new();
-    let redis_uri = std::env::var("REDIS_URI").ok();
-    let has_redis_uri = redis_uri.is_some();
     let result = STATE.set(State {
         reqwest: client.clone(),
         gcloud: gcloud::State::new(client)?,
         polly: polly::State::new(&aws_config::load_from_env().await),
         gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
 
+        cache: {
+            let max_cap = std::env::var("CACHE_MAX_CAPACITY")
+                .ok()
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(1000);
+
+            let cache = mini_moka::sync::Cache::builder()
+                .max_capacity(max_cap)
+                .build();
+
+            tracing::info!("Initialised audio cache with max capacity: {max_cap}");
+            cache
+        },
+
         auth_key: std::env::var("AUTH_KEY").ok().map(str_to_fixedstring),
         translation_key: std::env::var("DEEPL_KEY").ok().map(str_to_fixedstring),
-        redis: redis_uri.map(|uri| {
-            let key = std::env::var("CACHE_KEY").expect("CACHE_KEY not set!");
-            RedisCache {
-                client: deadpool_redis::Config::from_url(uri)
-                    .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-                    .unwrap(),
-                key: fernet::Fernet::new(&key).unwrap(),
-            }
-        }),
     });
+
     if result.is_err() {
         unreachable!()
     }
@@ -467,10 +458,7 @@ async fn main() -> Result<()> {
     let env_addr = std::env::var("BIND_ADDR");
     let bind_to = env_addr.as_deref().unwrap_or("0.0.0.0:3000");
 
-    tracing::info!(
-        "Binding to {bind_to} {} redis enabled!",
-        if has_redis_uri { "with" } else { "without" }
-    );
+    tracing::info!("Binding to {bind_to}...");
 
     let listener = tokio::net::TcpListener::bind(bind_to).await?;
     axum::serve(listener, app.into_make_service()).await?;

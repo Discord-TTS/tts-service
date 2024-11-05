@@ -32,10 +32,6 @@ A human readable message describing the error
 
 - `AUTH_KEY` - If set, this key must be sent in the `Authorization` header of each request
 
-- `REDIS_URI` - The URI of a redis instance to cache requests with
-
-- `CACHE_KEY` - Fernet encryption key to use to encrypt audio data
-
 ### gTTS Required
 - `IPV6_BLOCK` - A block of IPv6 addresses, randomly selected for each gTTS request
 
