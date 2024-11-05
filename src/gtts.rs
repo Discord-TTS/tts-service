@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{sync::OnceLock, time::Duration};
 
 use aformat::ToArrayString;
 use ipgen::IpNetwork;
@@ -6,7 +6,7 @@ use itertools::Itertools;
 use rand::Rng;
 use tokio::sync::RwLock;
 
-use crate::Result;
+use crate::{DeadlineMonitor, Result};
 
 #[derive(Clone)]
 pub struct State {
@@ -124,6 +124,10 @@ pub async fn get_tts(
     text: &str,
     voice: &str,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
+    let _guard = DeadlineMonitor::new(Duration::from_millis(100), |took| {
+        tracing::warn!("Fetching gTTS audio took {} millis!", took.as_millis());
+    });
+
     let mut content_type = None;
     let mut audio = Vec::new();
 

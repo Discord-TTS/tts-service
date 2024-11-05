@@ -6,7 +6,12 @@
     clippy::similar_names
 )]
 
-use std::{fmt::Display, str::FromStr, sync::OnceLock};
+use std::{
+    fmt::Display,
+    str::FromStr,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use axum::{http::header::HeaderValue, response::Response, routing::get, Json};
 use bytes::Bytes;
@@ -30,6 +35,35 @@ type ResponseResult<T> = std::result::Result<T, Error>;
 pub fn check_mp3_length(audio: &[u8], max_length: u64) -> bool {
     use bytes::Buf;
     mp3_duration::from_read(&mut audio.reader()).map_or(true, |d| d.as_secs() < max_length)
+}
+
+pub struct DeadlineMonitor<F: FnOnce(Duration)> {
+    expected: Duration,
+    start: Instant,
+    on_not_hit: Option<F>,
+}
+
+impl<F: FnOnce(Duration)> DeadlineMonitor<F> {
+    pub fn new(expected: Duration, on_not_hit: F) -> Self {
+        Self {
+            expected,
+            start: Instant::now(),
+            on_not_hit: Some(on_not_hit),
+        }
+    }
+}
+
+impl<F: FnOnce(Duration)> Drop for DeadlineMonitor<F> {
+    fn drop(&mut self) {
+        let Some(time_passed) = Instant::now().checked_duration_since(self.start) else {
+            tracing::debug!("Time went backwards!");
+            return;
+        };
+
+        if time_passed > self.expected {
+            (self.on_not_hit.take().unwrap())(time_passed);
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -74,7 +108,7 @@ async fn get_translation_languages() -> ResponseResult<Json<Vec<(FixedString, Fi
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 struct GetTTS {
     text: FixedString,
     mode: TTSMode,
@@ -89,10 +123,19 @@ struct GetTTS {
     translation_lang: Option<FixedString<u8>>,
 }
 
+#[expect(clippy::too_many_lines)]
 async fn get_tts(
     axum::extract::Query(payload): axum::extract::Query<GetTTS>,
     headers: axum::http::HeaderMap,
 ) -> ResponseResult<Response<axum::body::Body>> {
+    if payload.text.contains("SHOW TO DEVS") {
+        tracing::debug!("Recieved request to TTS: {payload:?}");
+    }
+
+    let _guard = DeadlineMonitor::new(Duration::from_millis(500), |took| {
+        tracing::warn!("get_tts took {} millis!", took.as_millis());
+    });
+
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
         let auth_header = headers.get("Authorization");
@@ -126,6 +169,10 @@ async fn get_tts(
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
     let redis_info = if let Some(redis_state) = &state.redis {
+        let _guard = DeadlineMonitor::new(Duration::from_millis(50), |took| {
+            tracing::warn!("Fetching from redis took {} millis!", took.as_millis());
+        });
+
         let cache_hash = sha2::Sha256::digest(&cache_key);
 
         let mut conn = redis_state.client.get().await?;
@@ -151,6 +198,10 @@ async fn get_tts(
         let Some(token) = &state.translation_key else {
             return Err(Error::TranslationDisabled);
         };
+
+        let _guard = DeadlineMonitor::new(Duration::from_millis(50), |took| {
+            tracing::warn!("Fetching translation took {} millis!", took.as_millis());
+        });
 
         if let Some(translated) = translation::run(&state.reqwest, token, &text, &language).await? {
             text = translated;
@@ -186,6 +237,10 @@ async fn get_tts(
 
     tracing::debug!("Generated TTS from {cache_key}");
     if let Some((mut redis_conn, key, cache_hash)) = redis_info {
+        let _guard = DeadlineMonitor::new(Duration::from_millis(50), |took| {
+            tracing::warn!("Caching audio result took {} millis!", took.as_millis());
+        });
+
         if let Err(err) = redis_conn
             .set::<_, _, ()>(&*cache_hash, key.encrypt(&audio))
             .await
