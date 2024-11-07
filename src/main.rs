@@ -11,14 +11,22 @@ use std::{
     fmt::Display,
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, OnceLock,
     },
     time::{Duration, Instant},
 };
 
-use axum::{http::header::HeaderValue, response::Response, routing::get, Json};
+use arc_swap::ArcSwap;
+use axum::{
+    http::header::HeaderValue,
+    response::Response,
+    routing::{get, post},
+    Json,
+};
 use bytes::Bytes;
+use mini_moka::sync::Cache;
+use reqwest::StatusCode;
 use serde_json::to_value;
 use sha2::{
     digest::{consts::U32, generic_array::GenericArray},
@@ -117,6 +125,44 @@ async fn get_translation_languages() -> ResponseResult<Json<Vec<(FixedString, Fi
     }
 }
 
+#[derive(serde::Serialize)]
+struct CacheInfo {
+    hits: u64,
+    misses: u64,
+    total: u64,
+}
+
+async fn get_cache_info() -> Json<CacheInfo> {
+    let cache = STATE.get().unwrap().cache.load();
+    let hits = cache.hits.load(Ordering::Relaxed);
+    let misses = cache.misses.load(Ordering::Relaxed);
+
+    Json(CacheInfo {
+        hits,
+        misses,
+        total: hits + misses,
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct RefreshCache {
+    new_capacity: u64,
+}
+
+async fn refresh_cache(
+    Json(RefreshCache { new_capacity }): Json<RefreshCache>,
+) -> reqwest::StatusCode {
+    let state = STATE.get().unwrap();
+
+    state.cache.store(Arc::new(AudioCache {
+        inner: Cache::new(new_capacity),
+        misses: AtomicU64::new(0),
+        hits: AtomicU64::new(0),
+    }));
+
+    StatusCode::OK
+}
+
 #[derive(serde::Deserialize, Debug)]
 struct GetTTS {
     text: FixedString,
@@ -195,13 +241,17 @@ async fn get_tts(
         );
 
         let cache_hash = sha2::Sha256::digest(&cache_key);
-        if let Some(cached_audio) = state.cache.get(&cache_hash) {
+        let audio_cache = state.cache.load();
+        if let Some(cached_audio) = audio_cache.inner.get(&cache_hash) {
+            audio_cache.hits.fetch_add(1, Ordering::Relaxed);
+
             mode.check_length(&cached_audio, payload.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
             return Ok(mode.into_response(cached_audio, None));
         }
 
+        audio_cache.misses.fetch_add(1, Ordering::Relaxed);
         cache_hash
     };
 
@@ -263,7 +313,7 @@ async fn get_tts(
         );
 
         tracing::debug!("Cached {} kb of audio", (audio.len() as f64) / 1024.0);
-        state.cache.insert(cache_hash, audio.clone());
+        state.cache.load().inner.insert(cache_hash, audio.clone());
     };
 
     mode.check_length(&audio, payload.max_length)?;
@@ -374,12 +424,18 @@ impl serde::Serialize for TTSMode {
     }
 }
 
+struct AudioCache {
+    inner: Cache<AudioCacheDigest, Bytes>,
+    misses: AtomicU64,
+    hits: AtomicU64,
+}
+
 struct State {
     auth_key: Option<FixedString<u8>>,
     translation_key: Option<FixedString<u8>>,
     reqwest: reqwest::Client,
 
-    cache: mini_moka::sync::Cache<AudioCacheDigest, Bytes>,
+    cache: ArcSwap<AudioCache>,
 
     polly: polly::State,
     gtts: tokio::sync::RwLock<gtts::State>,
@@ -423,12 +479,14 @@ async fn main() -> Result<()> {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(1000);
 
-            let cache = mini_moka::sync::Cache::builder()
-                .max_capacity(max_cap)
-                .build();
+            let cache = Cache::builder().max_capacity(max_cap).build();
 
             tracing::info!("Initialised audio cache with max capacity: {max_cap}");
-            cache
+            ArcSwap::from_pointee(AudioCache {
+                inner: cache,
+                hits: AtomicU64::new(0),
+                misses: AtomicU64::new(0),
+            })
         },
 
         auth_key: std::env::var("AUTH_KEY").ok().map(str_to_fixedstring),
@@ -442,6 +500,8 @@ async fn main() -> Result<()> {
     let app = axum::Router::new()
         .route("/tts", get(get_tts))
         .route("/voices", get(get_voices))
+        .route("/cache", get(get_cache_info))
+        .route("/cache", post(refresh_cache))
         .route("/translation_languages", get(get_translation_languages))
         .route(
             "/modes",

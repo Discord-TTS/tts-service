@@ -24,6 +24,7 @@ small-fixed-array = { version = "0.4.0", features = ["serde"] }
 memchr = "2.7.4"
 aformat = "0.1.4"
 mini-moka = { version = "0.10.3", features = ["sync"] }
+arc-swap = "1.7.1"
 
 [dependencies.tracing-subscriber]
 version = "0.3"
