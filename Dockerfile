@@ -24,7 +24,7 @@ FROM debian:bookworm-slim AS runtime
 COPY sparse-checkout.sh .
 
 RUN apt-get update && apt-get upgrade -y && \
-    apt-get install -y openssl ca-certificates git make autoconf automake libtool pkg-config g++ && \
+    apt-get install -y openssl ca-certificates git make autoconf automake libtool pkg-config g++ tini && \
     apt-get clean && \
     # Build and install espeak-ng
     git clone https://github.com/espeak-ng/espeak-ng --depth 1 && cd espeak-ng && \
@@ -35,11 +35,7 @@ RUN apt-get update && apt-get upgrade -y && \
     # Download the mbrola voices to /usr/share/mbrola.
     ./sparse-checkout.sh https://github.com/numediart/MBROLA-voices /usr/share/mbrola && mv /usr/share/mbrola/data/* /usr/share/mbrola && rm -r /usr/share/mbrola/data
 
-# Download tini to avoid zombie processes
-ADD https://github.com/krallin/tini/releases/latest/download/tini /usr/local/bin/tini
-RUN chmod +x /usr/local/bin/tini
-
 COPY --from=builder /build/target/release/tts-service /usr/local/bin/tts-service
 COPY Cargo.lock .
 
-CMD ["/usr/local/bin/tini", "/usr/local/bin/tts-service"]
+CMD ["/usr/bin/tini", "/usr/local/bin/tts-service"]
