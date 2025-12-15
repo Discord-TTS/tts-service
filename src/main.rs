@@ -99,14 +99,14 @@ async fn get_voices(
     Ok(axum::Json(if raw {
         match mode {
             TTSMode::gTTS => to_value(gtts::get_raw_voices()),
-            TTSMode::eSpeak => to_value(espeak::get_voices()),
+            TTSMode::eSpeak => to_value(espeak::get_voices(&state.espeak)),
             TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
             TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud).await?),
         }?
     } else {
         to_value(match mode {
             TTSMode::gTTS => gtts::get_voices(),
-            TTSMode::eSpeak => espeak::get_voices().to_vec(),
+            TTSMode::eSpeak => espeak::get_voices(&state.espeak).to_vec(),
             TTSMode::Polly => polly::get_voices(&state.polly).await?,
             TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
         })?
@@ -278,7 +278,8 @@ async fn get_tts(
             gtts::get_tts(&state.gtts, &text, &voice, hit_any_deadline.clone()).await?
         }
         TTSMode::eSpeak => {
-            espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?
+            let speaking_rate = speaking_rate.map_or(0, |r| r as u16);
+            espeak::get_tts(&state.espeak, &text, &voice, speaking_rate).await?
         }
         TTSMode::Polly => {
             polly::get_tts(
@@ -354,7 +355,7 @@ impl TTSMode {
     async fn check_voice(self, state: &State, voice: &str) -> ResponseResult<()> {
         if match self {
             Self::gTTS => gtts::check_voice(voice),
-            Self::eSpeak => espeak::check_voice(voice),
+            Self::eSpeak => espeak::check_voice(&state.espeak, voice),
             Self::gCloud => gcloud::check_voice(&state.gcloud, voice).await?,
             Self::Polly => polly::check_voice(&state.polly, voice).await?,
         } {
@@ -438,6 +439,7 @@ struct State {
     cache: ArcSwap<AudioCache>,
 
     polly: polly::State,
+    espeak: espeak::State,
     gtts: tokio::sync::RwLock<gtts::State>,
     gcloud: tokio::sync::RwLock<gcloud::State>,
 }
@@ -469,6 +471,7 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::new();
     let result = STATE.set(State {
         reqwest: client.clone(),
+        espeak: espeak::State::new(),
         gcloud: gcloud::State::new(client)?,
         polly: polly::State::new(&aws_config::load_from_env().await),
         gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),

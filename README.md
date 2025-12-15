@@ -32,8 +32,11 @@ A human readable message describing the error
 
 - `AUTH_KEY` - If set, this key must be sent in the `Authorization` header of each request
 
+- `MBROLA_VOICES_BASE_PATH` - If set, the voices for eSpeak mode must be located here, otherwise they are expected to be at `/usr/share/mbrola`
+
 ### gTTS Required
 - `IPV6_BLOCK` - A block of IPv6 addresses, randomly selected for each gTTS request
+
 
 ### gCloud Required
 - `GOOGLE_APPLICATION_CREDENTIALS` - The file path to the gCloud JSON

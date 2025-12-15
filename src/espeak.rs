@@ -1,11 +1,29 @@
 use std::sync::{LazyLock, OnceLock};
 
-use aformat::{aformat, CapStr, ToArrayString};
+use aformat::{aformat, ArrayString, CapStr, ToArrayString};
 use memchr::memmem::Finder;
 use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
 
 use crate::Result;
+
+pub(crate) struct State {
+    base_path: ArrayString<64>,
+    voices: OnceLock<Vec<String>>,
+}
+
+impl State {
+    pub fn new() -> Self {
+        Self {
+            voices: OnceLock::new(),
+            base_path: std::env::var("MBROLA_VOICES_BASE_PATH")
+                .as_deref()
+                .unwrap_or("/usr/share/mbrola")
+                .try_into()
+                .expect("eSpeak base path should be less than 64 bytes"),
+        }
+    }
+}
 
 struct Finders {
     replaced_with_err: Finder<'static>,
@@ -18,14 +36,16 @@ static MBROLA_ERR_FINDERS: LazyLock<Finders> = LazyLock::new(|| Finders {
 });
 
 pub async fn get_tts(
+    state: &State,
     text: &str,
     voice: &str,
     speaking_rate: u16,
 ) -> Result<(bytes::Bytes, Option<HeaderValue>)> {
-    if !check_voice(voice) {
+    if !check_voice(state, voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
 
+    let base_path = state.base_path;
     let voice = CapStr::<8>(voice);
     let Finders {
         repeat_err,
@@ -55,16 +75,12 @@ pub async fn get_tts(
         let espeak_stdout: std::process::Stdio =
             stdout.expect("Failed to open espeak stdout").try_into()?;
 
+        let voice_path = aformat!("{base_path}/{voice}/{voice}");
         let mut mbrola_process = tokio::process::Command::new("mbrola")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(espeak_stdout)
-            .args([
-                "-e",
-                &aformat!("/usr/share/mbrola/{voice}/{voice}"),
-                "-",
-                "-.wav",
-            ])
+            .args(["-e", &voice_path, "-", "-.wav"])
             .spawn()?;
 
         // Filter out some warning messages from mbrola that clutter logs
@@ -128,32 +144,30 @@ pub fn check_length(audio: &[u8], max_length: u32) -> bool {
         < max_length
 }
 
-pub fn get_voices() -> &'static [String] {
-    static VOICES: OnceLock<Vec<String>> = OnceLock::new();
-    VOICES.get_or_init(|| {
-        (|| {
-            let mut files = Vec::new();
-            for file in std::fs::read_dir("/usr/local/share/espeak-ng-data/voices/mb")? {
-                let file = file?;
-                if file.file_type()?.is_file() {
-                    let file_name = file.file_name().into_string().expect("Invalid filename!");
-                    let mut file_name_iter = file_name.split('-').skip(1);
-
-                    if let Some(language) = file_name_iter.next() {
-                        if file_name_iter.next().is_none() {
-                            files.push(language.to_owned());
-                        }
-                    }
+pub fn get_voices(state: &State) -> &[String] {
+    state.voices.get_or_init(move || {
+        (move || {
+            let mut voices = Vec::new();
+            println!("Collecting voices from {}", state.base_path.as_str());
+            for entry in std::fs::read_dir(state.base_path.as_str())? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    voices.push(entry.file_name().into_string().expect("Invalid filename!"));
                 }
             }
 
-            files.sort();
-            anyhow::Ok(files)
+            voices.sort();
+            println!(
+                "Collected {} voices from {}",
+                voices.len(),
+                state.base_path.as_str()
+            );
+            anyhow::Ok(voices)
         })()
         .unwrap()
     })
 }
 
-pub fn check_voice(voice: &str) -> bool {
-    get_voices().iter().any(|s| s.as_str() == voice)
+pub fn check_voice(state: &State, voice: &str) -> bool {
+    get_voices(state).iter().any(|s| s.as_str() == voice)
 }
