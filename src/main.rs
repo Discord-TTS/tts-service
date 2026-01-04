@@ -178,15 +178,33 @@ struct GetTTS {
     translation_lang: Option<FixedString<u8>>,
 }
 
+impl GetTTS {
+    fn get_cache_key(&self) -> String {
+        let Self {
+            max_length: _,
+
+            text,
+            mode,
+            voice,
+            speaking_rate,
+            preferred_format,
+            translation_lang,
+        } = self;
+
+        format!(
+            "{text}{voice}{mode}{}{}{}",
+            speaking_rate.unwrap_or(0.0),
+            preferred_format.as_deref().unwrap_or(""),
+            translation_lang.as_deref().unwrap_or(""),
+        )
+    }
+}
+
 #[expect(clippy::too_many_lines)]
 async fn get_tts(
-    axum::extract::Query(payload): axum::extract::Query<GetTTS>,
+    axum::extract::Query(query): axum::extract::Query<GetTTS>,
     headers: axum::http::HeaderMap,
 ) -> ResponseResult<Response<axum::body::Body>> {
-    if payload.text.contains("SHOW TO DEVS") {
-        tracing::debug!("Recieved request to TTS: {payload:?}");
-    }
-
     let hit_any_deadline = Arc::new(AtomicBool::new(false));
     let _guard = DeadlineMonitor::new(
         Duration::from_millis(5000),
@@ -204,28 +222,10 @@ async fn get_tts(
         }
     }
 
-    let translation_lang = payload.translation_lang;
-    let preferred_format = payload.preferred_format;
-    let speaking_rate = payload.speaking_rate;
-    let mut text = payload.text;
-    let voice = payload.voice;
-    let mode = payload.mode;
+    query.mode.check_speaking_rate(query.speaking_rate)?;
+    query.mode.check_voice(state, &query.voice).await?;
 
-    mode.check_speaking_rate(speaking_rate)?;
-    mode.check_voice(state, &voice).await?;
-
-    let mut cache_key = format!("{text} {voice} {mode} {}", speaking_rate.unwrap_or(0.0));
-
-    if let Some(preferred_format) = &preferred_format {
-        cache_key.push(' ');
-        cache_key.push_str(preferred_format);
-    }
-
-    if let Some(translation_lang) = &translation_lang {
-        cache_key.push(' ');
-        cache_key.push_str(translation_lang);
-    }
-
+    let cache_key = query.get_cache_key();
     tracing::debug!("Recieved request to TTS: {cache_key}");
 
     let cache_hash = {
@@ -245,17 +245,17 @@ async fn get_tts(
         if let Some(cached_audio) = audio_cache.inner.get(&cache_hash) {
             audio_cache.hits.fetch_add(1, Ordering::Relaxed);
 
-            mode.check_length(&cached_audio, payload.max_length)?;
+            query.mode.check_length(&cached_audio, query.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
-            return Ok(mode.into_response(cached_audio, None));
+            return Ok(query.mode.into_response(cached_audio, None));
         }
 
         audio_cache.misses.fetch_add(1, Ordering::Relaxed);
         cache_hash
     };
 
-    if let Some(language) = translation_lang {
+    let text = if let Some(language) = query.translation_lang {
         let Some(token) = &state.translation_key else {
             return Err(Error::TranslationDisabled);
         };
@@ -268,25 +268,31 @@ async fn get_tts(
             },
         );
 
-        if let Some(translated) = translation::run(&state.reqwest, token, &text, &language).await? {
-            text = translated;
-        }
-    }
+        let translated = translation::run(&state.reqwest, token, &query.text, &language).await?;
+        translated.unwrap_or(query.text)
+    } else {
+        query.text
+    };
 
-    let (audio, content_type) = match mode {
+    let (audio, content_type) = match query.mode {
         TTSMode::gTTS => {
-            gtts::get_tts(&state.gtts, &text, &voice, hit_any_deadline.clone()).await?
+            gtts::get_tts(&state.gtts, &text, &query.voice, hit_any_deadline.clone()).await?
         }
         TTSMode::eSpeak => {
-            espeak::get_tts(&text, &voice, speaking_rate.map_or(0, |r| r as u16)).await?
+            espeak::get_tts(
+                &text,
+                &query.voice,
+                query.speaking_rate.map_or(0, |r| r as u16),
+            )
+            .await?
         }
         TTSMode::Polly => {
             polly::get_tts(
                 &state.polly,
                 text,
-                &voice,
-                speaking_rate.map(|r| r as u8),
-                preferred_format.as_deref(),
+                &query.voice,
+                query.speaking_rate.map(|r| r as u8),
+                query.preferred_format.as_deref(),
             )
             .await?
         }
@@ -294,9 +300,9 @@ async fn get_tts(
             gcloud::get_tts(
                 &state.gcloud,
                 &text,
-                &voice,
-                speaking_rate.unwrap_or(0.0),
-                preferred_format.as_deref(),
+                &query.voice,
+                query.speaking_rate.unwrap_or(0.0),
+                query.preferred_format.as_deref(),
             )
             .await?
         }
@@ -316,8 +322,8 @@ async fn get_tts(
         state.cache.load().inner.insert(cache_hash, audio.clone());
     };
 
-    mode.check_length(&audio, payload.max_length)?;
-    Ok(mode.into_response(audio, content_type))
+    query.mode.check_length(&audio, query.max_length)?;
+    Ok(query.mode.into_response(audio, content_type))
 }
 
 #[derive(serde::Deserialize, Clone, Copy, Debug)]
