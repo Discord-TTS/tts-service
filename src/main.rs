@@ -96,19 +96,21 @@ async fn get_voices(
     let GetVoices { mode, raw } = payload;
     let state = STATE.get().unwrap();
 
+    mode.check_keys(state)?;
+    
     Ok(axum::Json(if raw {
         match mode {
             TTSMode::gTTS => to_value(gtts::get_raw_voices()),
             TTSMode::eSpeak => to_value(espeak::get_voices()),
             TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
-            TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud).await?),
+            TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud.as_ref().unwrap()).await?),
         }?
     } else {
         to_value(match mode {
             TTSMode::gTTS => gtts::get_voices(),
             TTSMode::eSpeak => espeak::get_voices().to_vec(),
             TTSMode::Polly => polly::get_voices(&state.polly).await?,
-            TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
+            TTSMode::gCloud => gcloud::get_voices(&state.gcloud.as_ref().unwrap()).await?,
         })?
     }))
 }
@@ -203,7 +205,7 @@ async fn get_tts(
             return Err(Error::Unauthorized);
         }
     }
-
+    
     let translation_lang = payload.translation_lang;
     let preferred_format = payload.preferred_format;
     let speaking_rate = payload.speaking_rate;
@@ -211,6 +213,8 @@ async fn get_tts(
     let voice = payload.voice;
     let mode = payload.mode;
 
+    mode.check_keys(state)?;
+    
     mode.check_speaking_rate(speaking_rate)?;
     mode.check_voice(state, &voice).await?;
 
@@ -292,7 +296,7 @@ async fn get_tts(
         }
         TTSMode::gCloud => {
             gcloud::get_tts(
-                &state.gcloud,
+                &state.gcloud.as_ref().unwrap(),
                 &text,
                 &voice,
                 speaking_rate.unwrap_or(0.0),
@@ -320,7 +324,7 @@ async fn get_tts(
     Ok(mode.into_response(audio, content_type))
 }
 
-#[derive(serde::Deserialize, Clone, Copy, Debug)]
+#[derive(serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 #[allow(non_camel_case_types)]
 enum TTSMode {
     gTTS,
@@ -352,19 +356,31 @@ impl TTSMode {
     }
 
     async fn check_voice(self, state: &State, voice: &str) -> ResponseResult<()> {
+        self.check_keys(state)?;
+       
         if match self {
             Self::gTTS => gtts::check_voice(voice),
             Self::eSpeak => espeak::check_voice(voice),
-            Self::gCloud => gcloud::check_voice(&state.gcloud, voice).await?,
+            Self::gCloud => gcloud::check_voice(&state.gcloud.as_ref().unwrap(), voice).await?,
             Self::Polly => polly::check_voice(&state.polly, voice).await?,
         } {
-            Ok(())
+            return Ok(());
         } else {
-            Err(Error::UnknownVoice(
+            return Err(Error::UnknownVoice(
                 format!("Unknown voice: {voice}").into_boxed_str(),
-            ))
+            ));
         }
     }
+
+    fn check_keys(self, state: &State) -> ResponseResult<()> {
+        // If we're trying to use gCloud, check for a gCloud key.
+        if self == Self::gCloud && state.gcloud.is_none() {
+            return Err(Error::NoGcloudKey);
+        }
+
+        Ok(())
+    }
+
 
     fn check_length(self, audio: &[u8], max_length: Option<u64>) -> ResponseResult<()> {
         if max_length.is_none_or(|max_length| match self {
@@ -439,7 +455,7 @@ struct State {
 
     polly: polly::State,
     gtts: tokio::sync::RwLock<gtts::State>,
-    gcloud: tokio::sync::RwLock<gcloud::State>,
+    gcloud: Option<tokio::sync::RwLock<gcloud::State>>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -469,7 +485,14 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::new();
     let result = STATE.set(State {
         reqwest: client.clone(),
-        gcloud: gcloud::State::new(client)?,
+        gcloud: {
+            let gcloud = gcloud::State::new(client);
+
+            match gcloud {
+                Ok(gc) => Some(gc),
+                Err(_) => None,
+            }
+        },
         polly: polly::State::new(&aws_config::load_from_env().await),
         gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
 
@@ -506,12 +529,17 @@ async fn main() -> Result<()> {
         .route(
             "/modes",
             get(|| async {
-                axum::Json([
-                    TTSMode::gTTS,
-                    TTSMode::Polly,
-                    TTSMode::eSpeak,
-                    TTSMode::gCloud,
-                ])
+                let mut states = Vec::new();
+                
+                states.push(TTSMode::gTTS);
+                states.push(TTSMode::Polly);
+                states.push(TTSMode::eSpeak);
+
+                if STATE.get().unwrap().gcloud.is_some() {
+                    states.push(TTSMode::gCloud);
+                }
+
+                axum::Json(states)
             }),
         );
 
@@ -532,6 +560,7 @@ enum Error {
     UnknownVoice(Box<str>),
     AudioTooLong,
     InvalidSpeakingRate(f32),
+    NoGcloudKey,
 
     Unknown(anyhow::Error),
 }
@@ -549,6 +578,7 @@ impl std::fmt::Display for Error {
             Self::AudioTooLong => f.write_str("Max length exceeded!"),
             Self::UnknownVoice(msg) => f.write_str(msg),
             Self::Unauthorized => write!(f, "Unauthorized request"),
+            Self::NoGcloudKey => write!(f, "No GCloud translation key"),
             Self::TranslationDisabled => {
                 write!(f, "Translation requested but no key has been provided")
             }
@@ -571,6 +601,7 @@ impl axum::response::IntoResponse for Error {
                 Self::InvalidSpeakingRate(_) => 3,
                 Self::AudioTooLong => 2,
                 Self::UnknownVoice(_) => 1,
+                Self::NoGcloudKey => 6,
                 Self::Unknown(_) => 0_u8,
             },
         });
@@ -581,7 +612,7 @@ impl axum::response::IntoResponse for Error {
             }
             Self::Unknown(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Self::UnknownVoice(_) => axum::http::StatusCode::BAD_REQUEST,
-            Self::Unauthorized => axum::http::StatusCode::FORBIDDEN,
+            Self::Unauthorized | Self::NoGcloudKey => axum::http::StatusCode::FORBIDDEN,
         };
 
         (status, axum::Json(json_err)).into_response()
