@@ -74,10 +74,10 @@ pub async fn run(
         .json()
         .await?;
 
-    if let Some(translation) = response.translations {
-        if translation.detected_source_language != target_lang {
-            return Ok(Some(translation.text));
-        }
+    if let Some(translation) = response.translations
+        && translation.detected_source_language != target_lang
+    {
+        return Ok(Some(translation.text));
     }
 
     Ok(None)

@@ -1,6 +1,6 @@
 use std::sync::{LazyLock, OnceLock};
 
-use aformat::{aformat, CapStr, ToArrayString};
+use aformat::{CapStr, ToArrayString, aformat};
 use memchr::memmem::Finder;
 use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
@@ -139,10 +139,10 @@ pub fn get_voices() -> &'static [String] {
                     let file_name = file.file_name().into_string().expect("Invalid filename!");
                     let mut file_name_iter = file_name.split('-').skip(1);
 
-                    if let Some(language) = file_name_iter.next() {
-                        if file_name_iter.next().is_none() {
-                            files.push(language.to_owned());
-                        }
+                    if let Some(language) = file_name_iter.next()
+                        && file_name_iter.next().is_none()
+                    {
+                        files.push(language.to_owned());
                     }
                 }
             }

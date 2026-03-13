@@ -11,26 +11,26 @@ use std::{
     fmt::Display,
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use arc_swap::ArcSwap;
 use axum::{
+    Json,
     http::header::HeaderValue,
     response::Response,
     routing::{get, post},
-    Json,
 };
 use bytes::Bytes;
 use mini_moka::sync::Cache;
 use reqwest::StatusCode;
 use serde_json::to_value;
 use sha2::{
-    digest::{consts::U32, generic_array::GenericArray},
     Digest,
+    digest::{consts::U32, generic_array::GenericArray},
 };
 use small_fixed_array::{FixedString, ValidLength};
 use tracing::level_filters::LevelFilter;
@@ -206,13 +206,9 @@ async fn get_tts(
     headers: axum::http::HeaderMap,
 ) -> ResponseResult<Response<axum::body::Body>> {
     let hit_any_deadline = Arc::new(AtomicBool::new(false));
-    let _guard = DeadlineMonitor::new(
-        Duration::from_millis(5000),
-        hit_any_deadline.clone(),
-        |took| {
-            tracing::warn!("get_tts took {} millis!", took.as_millis());
-        },
-    );
+    let _guard = DeadlineMonitor::new(Duration::from_secs(5), hit_any_deadline.clone(), |took| {
+        tracing::warn!("get_tts took {} millis!", took.as_millis());
+    });
 
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
@@ -385,12 +381,11 @@ impl TTSMode {
     }
 
     fn check_speaking_rate(self, speaking_rate: Option<f32>) -> ResponseResult<()> {
-        if let Some(speaking_rate) = speaking_rate {
-            if let Some(max) = self.max_speaking_rate() {
-                if speaking_rate > max {
-                    return Err(Error::InvalidSpeakingRate(speaking_rate));
-                }
-            }
+        if let Some(speaking_rate) = speaking_rate
+            && let Some(max) = self.max_speaking_rate()
+            && speaking_rate > max
+        {
+            return Err(Error::InvalidSpeakingRate(speaking_rate));
         }
 
         Ok(())

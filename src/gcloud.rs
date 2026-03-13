@@ -142,7 +142,7 @@ fn generate_jwt(
     let mut headers = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
     headers.kid = Some(private_key_raw);
 
-    let new_expire_time = current_time + std::time::Duration::from_secs(3600);
+    let new_expire_time = current_time + std::time::Duration::from_hours(1);
     let payload = serde_json::json!({
         "exp": new_expire_time.duration_since(std::time::UNIX_EPOCH)?.as_secs(),
         "iat": current_time.duration_since(std::time::UNIX_EPOCH)?.as_secs(),
