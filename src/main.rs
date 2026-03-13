@@ -36,11 +36,10 @@ use small_fixed_array::{FixedString, ValidLength};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod espeak;
-mod gcloud;
-mod gtts;
-mod polly;
+mod modes;
 mod translation;
+
+use modes::{espeak, gcloud, gtts, polly};
 
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;

@@ -1,5 +1,5 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc, OnceLock},
+    sync::{Arc, OnceLock, atomic::AtomicBool},
     time::Duration,
 };
 
