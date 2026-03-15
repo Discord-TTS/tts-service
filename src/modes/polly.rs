@@ -2,7 +2,7 @@ use aws_sdk_polly::types::{Engine, Gender, LanguageCode, OutputFormat, TextType,
 use serde::ser::SerializeStruct;
 use small_fixed_array::FixedString;
 
-use crate::Result;
+use crate::{Result, transcode::DISCORD_SAMPLE_RATE};
 
 pub type State = aws_sdk_polly::Client;
 
@@ -64,8 +64,7 @@ pub async fn get_tts(
     text: FixedString,
     voice: &str,
     speaking_rate: Option<u8>,
-    preferred_format: Option<&str>,
-) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
+) -> Result<bytes::Bytes> {
     let text = if let Some(speaking_rate) = speaking_rate {
         format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>")
     } else {
@@ -79,27 +78,15 @@ pub async fn get_tts(
         } else {
             TextType::Text
         }))
-        .set_output_format(
-            preferred_format
-                .and_then(|pf| match pf.to_lowercase().as_str() {
-                    "mp3" => Some(OutputFormat::Mp3),
-                    "pcm" => Some(OutputFormat::Pcm),
-                    _ => None,
-                })
-                .or(Some(OutputFormat::OggVorbis)),
-        )
+        .set_output_format(Some(OutputFormat::OggOpus))
+        .set_sample_rate(Some(DISCORD_SAMPLE_RATE.to_string()))
         .set_engine(Some(Engine::Standard))
         .set_voice_id(Some(voice.into()))
         .set_text(Some(text))
         .send()
         .await?;
 
-    Ok((
-        resp.audio_stream.collect().await?.into_bytes(),
-        resp.content_type
-            .map(TryInto::try_into)
-            .and_then(Result::ok),
-    ))
+    Ok(resp.audio_stream.collect().await?.into_bytes())
 }
 
 static VOICES: tokio::sync::OnceCell<Vec<VoiceLocal>> = tokio::sync::OnceCell::const_new();

@@ -25,6 +25,9 @@ memchr = "2.7.4"
 aformat = "0.1.4"
 mini-moka = { version = "0.10.3", features = ["sync"] }
 arc-swap = "1.7.1"
+symphonia = { version = "0.5.5", features = ["mp3", "opt-simd"], default-features = false }
+rusty_pool = "0.7.0"
+audiopus = { version = "0.2.0", features = ["encoder"] }
 
 [dependencies.tracing-subscriber]
 version = "0.3"

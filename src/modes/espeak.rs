@@ -2,7 +2,6 @@ use std::sync::{LazyLock, OnceLock};
 
 use aformat::{CapStr, ToArrayString, aformat};
 use memchr::memmem::Finder;
-use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
 
 use crate::Result;
@@ -17,11 +16,7 @@ static MBROLA_ERR_FINDERS: LazyLock<Finders> = LazyLock::new(|| Finders {
     repeat_err: Finder::new(b"mbrowrap error: unable to get .wav header from mbrola"),
 });
 
-pub async fn get_tts(
-    text: &str,
-    voice: &str,
-    speaking_rate: u16,
-) -> Result<(bytes::Bytes, Option<HeaderValue>)> {
+pub async fn get_tts(text: &str, voice: &str, speaking_rate: u16) -> Result<bytes::Bytes> {
     if !check_voice(voice) {
         anyhow::bail!("Invalid voice: {voice}");
     }
@@ -113,10 +108,7 @@ pub async fn get_tts(
     raw_wav[4..8].copy_from_slice(&(wav_len - 8).to_le_bytes());
     raw_wav[40..44].copy_from_slice(&(wav_len - 44).to_le_bytes());
 
-    Ok((
-        bytes::Bytes::from(raw_wav),
-        Some(HeaderValue::from_static("audio/wav")),
-    ))
+    Ok(bytes::Bytes::from(raw_wav))
 }
 
 pub fn check_length(audio: &[u8], max_length: u32) -> bool {

@@ -20,7 +20,7 @@ use std::{
 use arc_swap::ArcSwap;
 use axum::{
     Json,
-    http::header::HeaderValue,
+    http::header::{CONTENT_TYPE, HeaderValue},
     response::Response,
     routing::{get, post},
 };
@@ -37,6 +37,7 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod modes;
+mod transcode;
 mod translation;
 
 use modes::{espeak, gcloud, gtts, polly};
@@ -172,8 +173,6 @@ struct GetTTS {
     speaking_rate: Option<f32>,
     max_length: Option<u64>,
     #[serde(default)]
-    preferred_format: Option<FixedString<u8>>,
-    #[serde(default)]
     translation_lang: Option<FixedString<u8>>,
 }
 
@@ -186,20 +185,24 @@ impl GetTTS {
             mode,
             voice,
             speaking_rate,
-            preferred_format,
             translation_lang,
         } = self;
 
         format!(
-            "{text}{voice}{mode}{}{}{}",
+            "{text}{voice}{mode}{}{}",
             speaking_rate.unwrap_or(0.0),
-            preferred_format.as_deref().unwrap_or(""),
             translation_lang.as_deref().unwrap_or(""),
         )
     }
 }
 
-#[expect(clippy::too_many_lines)]
+fn build_tts_response(data: Bytes) -> Response<axum::body::Body> {
+    Response::builder()
+        .header(CONTENT_TYPE, HeaderValue::from_static("audio/opus"))
+        .body(axum::body::Body::from(data))
+        .unwrap()
+}
+
 async fn get_tts(
     axum::extract::Query(query): axum::extract::Query<GetTTS>,
     headers: axum::http::HeaderMap,
@@ -243,7 +246,7 @@ async fn get_tts(
             query.mode.check_length(&cached_audio, query.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
-            return Ok(query.mode.into_response(cached_audio, None));
+            return Ok(build_tts_response(cached_audio));
         }
 
         audio_cache.misses.fetch_add(1, Ordering::Relaxed);
@@ -269,7 +272,7 @@ async fn get_tts(
         query.text
     };
 
-    let (audio, content_type) = match query.mode {
+    let audio = match query.mode {
         TTSMode::gTTS => {
             gtts::get_tts(&state.gtts, &text, &query.voice, hit_any_deadline.clone()).await?
         }
@@ -287,7 +290,6 @@ async fn get_tts(
                 text,
                 &query.voice,
                 query.speaking_rate.map(|r| r as u8),
-                query.preferred_format.as_deref(),
             )
             .await?
         }
@@ -297,7 +299,6 @@ async fn get_tts(
                 &text,
                 &query.voice,
                 query.speaking_rate.unwrap_or(0.0),
-                query.preferred_format.as_deref(),
             )
             .await?
         }
@@ -318,7 +319,7 @@ async fn get_tts(
     };
 
     query.mode.check_length(&audio, query.max_length)?;
-    Ok(query.mode.into_response(audio, content_type))
+    Ok(build_tts_response(audio))
 }
 
 #[derive(serde::Deserialize, Clone, Copy, Debug)]
@@ -331,27 +332,6 @@ enum TTSMode {
 }
 
 impl TTSMode {
-    fn into_response(
-        self,
-        data: Bytes,
-        content_type: Option<reqwest::header::HeaderValue>,
-    ) -> Response {
-        Response::builder()
-            .header(
-                axum::http::header::CONTENT_TYPE,
-                content_type.unwrap_or_else(|| {
-                    HeaderValue::from_static(match self {
-                        Self::gTTS => "audio/mpeg",
-                        Self::eSpeak => "audio/wav",
-                        Self::gCloud => "audio/opus",
-                        Self::Polly => "audio/ogg",
-                    })
-                }),
-            )
-            .body(axum::body::Body::from(data))
-            .unwrap()
-    }
-
     async fn check_voice(self, state: &State, voice: &str) -> ResponseResult<()> {
         if match self {
             Self::gTTS => gtts::check_voice(voice),

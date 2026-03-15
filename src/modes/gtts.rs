@@ -85,7 +85,7 @@ pub async fn get_random_ipv6(ip_block: Option<IpNetwork>) -> Result<State> {
 }
 
 enum CheckResult {
-    Ok(Option<reqwest::header::HeaderValue>, bytes::Bytes),
+    Ok(bytes::Bytes),
     NormalBlock,
     TimeoutBlock,
     HostUnreachable,
@@ -100,14 +100,11 @@ fn is_host_unreachable(err: &reqwest::Error) -> bool {
 
 async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResult> {
     match resp {
-        Ok(mut resp) => {
+        Ok(resp) => {
             if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 Ok(CheckResult::NormalBlock)
             } else {
-                let content_type = resp.headers_mut().remove(reqwest::header::CONTENT_TYPE);
-                let audio = resp.error_for_status()?.bytes().await?;
-
-                Ok(CheckResult::Ok(content_type, audio))
+                Ok(CheckResult::Ok(resp.error_for_status()?.bytes().await?))
             }
         }
         Err(err) => {
@@ -127,12 +124,11 @@ pub async fn get_tts(
     text: &str,
     voice: &str,
     hit_any_deadline: Arc<AtomicBool>,
-) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
+) -> Result<bytes::Bytes> {
     let _guard = DeadlineMonitor::new(Duration::from_secs(3), hit_any_deadline, |took| {
         tracing::warn!("Fetching gTTS audio took {} millis!", took.as_millis());
     });
 
-    let mut content_type = None;
     let mut audio = Vec::new();
 
     let chunks: Vec<String> = text
@@ -148,11 +144,7 @@ pub async fn get_tts(
                 (ip, http.get(parse_url(&chunk, voice)).send().await)
             };
 
-            if let CheckResult::Ok(content_type_, audio_chunk) = is_block(result).await? {
-                if let Some(content_type_) = content_type_ {
-                    content_type = Some(content_type_);
-                }
-
+            if let CheckResult::Ok(audio_chunk) = is_block(result).await? {
                 break audio.extend(audio_chunk);
             }
 
@@ -165,7 +157,7 @@ pub async fn get_tts(
         }
     }
 
-    Ok((bytes::Bytes::from(audio), content_type))
+    transcode::mp3_to_opus(audio)
 }
 
 pub fn check_voice(voice: &str) -> bool {

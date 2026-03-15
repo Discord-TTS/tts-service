@@ -1,7 +1,7 @@
 use base64::Engine;
 use tokio::sync::RwLock;
 
-use crate::Result;
+use crate::{Result, transcode::DISCORD_SAMPLE_RATE};
 
 const GOOGLE_API_BASE: &str = "https://texttospeech.googleapis.com/";
 
@@ -66,52 +66,10 @@ pub struct GoogleVoice {
     pub languageCodes: [String; 1],
 }
 
-#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-#[derive(Clone, Copy)]
-enum AudioEncoding {
-    LINEAR16,
-    OGG_OPUS,
-    MULAW,
-    ALAW,
-    MP3,
-}
-
-impl AudioEncoding {
-    fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "LINEAR16" => Some(AudioEncoding::LINEAR16),
-            "OGG_OPUS" => Some(AudioEncoding::OGG_OPUS),
-            "MULAW" => Some(AudioEncoding::MULAW),
-            "ALAW" => Some(AudioEncoding::ALAW),
-            "MP3" => Some(AudioEncoding::MP3),
-            _ => None,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            AudioEncoding::LINEAR16 => "LINEAR16",
-            AudioEncoding::OGG_OPUS => "OGG_OPUS",
-            AudioEncoding::MULAW => "MULAW",
-            AudioEncoding::ALAW => "ALAW",
-            AudioEncoding::MP3 => "MP3",
-        }
-    }
-
-    fn content_type(self) -> &'static str {
-        match self {
-            Self::LINEAR16 | Self::ALAW | Self::MULAW => "audio/wav",
-            Self::OGG_OPUS => "audio/opus",
-            Self::MP3 => "audio/mpeg",
-        }
-    }
-}
-
 fn generate_google_json(
     content: &str,
     lang: &str,
     speaking_rate: f32,
-    audio_encoding: &str,
 ) -> Result<impl serde::Serialize> {
     let (lang, variant) = lang
         .split_once(' ')
@@ -126,7 +84,8 @@ fn generate_google_json(
             "name": format!("{lang}-Standard-{variant}"),
         },
         "audioConfig": {
-            "audioEncoding": audio_encoding,
+            "audioEncoding": "OGG_OPUS",
+            "sampleRateHertz": DISCORD_SAMPLE_RATE,
             "speakingRate": speaking_rate
         }
     }))
@@ -189,23 +148,13 @@ pub async fn get_tts(
     text: &str,
     lang: &str,
     speaking_rate: f32,
-    preferred_format: Option<&str>,
-) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
+) -> Result<bytes::Bytes> {
     let jwt_token = refresh_jwt(state).await?;
     let reqwest = state.read().await.reqwest.clone();
 
-    let audio_encoding = preferred_format
-        .and_then(|pf| AudioEncoding::from_str(&pf.to_uppercase()))
-        .unwrap_or(AudioEncoding::OGG_OPUS);
-
     let resp = reqwest
         .post(format!("{GOOGLE_API_BASE}v1/text:synthesize"))
-        .json(&generate_google_json(
-            text,
-            lang,
-            speaking_rate,
-            audio_encoding.as_str(),
-        )?)
+        .json(&generate_google_json(text, lang, speaking_rate)?)
         .header(
             reqwest::header::AUTHORIZATION,
             format!("Bearer {jwt_token}"),
@@ -217,13 +166,8 @@ pub async fn get_tts(
     let resp_raw = resp.bytes().await?;
     let audio_response: AudioResponse = serde_json::from_slice(&resp_raw)?;
 
-    Ok((
-        bytes::Bytes::from(
-            base64::engine::general_purpose::STANDARD.decode(audio_response.audio_content)?,
-        ),
-        Some(reqwest::header::HeaderValue::from_static(
-            audio_encoding.content_type(),
-        )),
+    Ok(bytes::Bytes::from(
+        base64::engine::general_purpose::STANDARD.decode(audio_response.audio_content)?,
     ))
 }
 
