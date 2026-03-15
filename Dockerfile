@@ -24,14 +24,14 @@ FROM debian:trixie-slim AS runtime
 COPY sparse-checkout.sh .
 
 RUN apt-get update && apt-get upgrade -y && \
-    apt-get install -y openssl ca-certificates git make autoconf automake libtool pkg-config g++ tini && \
+    apt-get install -y cmake git make g++ tini && \
     apt-get clean && \
     # Build and install espeak-ng
     git clone https://github.com/espeak-ng/espeak-ng --depth 1 && cd espeak-ng && \
-    ./autogen.sh && ./configure && make && make install && \ 
+    cmake . && make -j && make install && \
     cd .. && rm -rf espeak-ng && mv /usr/local/lib/libespeak* /usr/lib && \
     # Build and install mbrola
-    git clone https://github.com/numediart/MBROLA --depth 1 && cd MBROLA && make && cp Bin/mbrola /usr/bin/mbrola && cd .. && rm -rf MBROLA && \
+    git clone https://github.com/numediart/MBROLA --depth 1 && cd MBROLA && make -j && cp Bin/mbrola /usr/bin/mbrola && cd .. && rm -rf MBROLA && \
     # Download the mbrola voices to /usr/share/mbrola.
     ./sparse-checkout.sh https://github.com/numediart/MBROLA-voices /usr/share/mbrola && mv /usr/share/mbrola/data/* /usr/share/mbrola && rm -r /usr/share/mbrola/data
 
