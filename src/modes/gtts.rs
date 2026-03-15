@@ -6,7 +6,7 @@ use std::{
 use aformat::ToArrayString;
 use ipgen::IpNetwork;
 use itertools::Itertools;
-use rand::Rng;
+use rand::RngExt as _;
 use tokio::sync::RwLock;
 
 use crate::{DeadlineMonitor, Result};
@@ -51,8 +51,8 @@ pub async fn get_random_ipv6(ip_block: Option<IpNetwork>) -> Result<State> {
 
     let mut attempts = 1;
     loop {
-        let name: String = rand::thread_rng()
-            .sample_iter::<char, _>(rand::distributions::Standard)
+        let name: String = rand::rng()
+            .sample_iter::<char, _>(rand::distr::StandardUniform)
             .take(16)
             .collect();
 

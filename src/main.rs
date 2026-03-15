@@ -450,6 +450,10 @@ fn str_to_fixedstring<LenT: ValidLength>(str: String) -> FixedString<LenT> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .unwrap();
+
     let log_env = std::env::var("LOG_LEVEL");
 
     let fmt_layer = tracing_subscriber::fmt::layer();
