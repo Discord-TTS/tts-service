@@ -25,6 +25,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             mold
+            cmake
             (rust-bin.selectLatestNightlyWith (
               toolchain:
               toolchain.default.override {

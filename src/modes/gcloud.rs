@@ -80,7 +80,7 @@ impl AudioEncoding {
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "LINEAR16" => Some(AudioEncoding::LINEAR16),
-            "OGG_OPUS" => Some(AudioEncoding::OGG_OPUS),
+            "OPUS" => Some(AudioEncoding::OGG_OPUS),
             "MULAW" => Some(AudioEncoding::MULAW),
             "ALAW" => Some(AudioEncoding::ALAW),
             "MP3" => Some(AudioEncoding::MP3),

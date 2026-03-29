@@ -84,6 +84,7 @@ pub async fn get_tts(
                 .and_then(|pf| match pf.to_lowercase().as_str() {
                     "mp3" => Some(OutputFormat::Mp3),
                     "pcm" => Some(OutputFormat::Pcm),
+                    "opus" => Some(OutputFormat::OggOpus),
                     _ => None,
                 })
                 .or(Some(OutputFormat::OggVorbis)),

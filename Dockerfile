@@ -12,7 +12,7 @@ FROM chef AS builder
 
 # This is a dummy build to get the dependencies cached.
 COPY --from=planner /build/recipe.json recipe.json
-RUN cargo chef cook --release
+RUN apt-get update && apt-get upgrade -y && apt-get install -y cmake && cargo chef cook --release
 
 # This is the actual build, copy in the rest of the sources
 COPY . .

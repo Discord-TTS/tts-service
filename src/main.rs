@@ -36,6 +36,7 @@ use small_fixed_array::{FixedString, ValidLength};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod dispatch;
 mod modes;
 mod translation;
 
@@ -199,16 +200,14 @@ impl GetTTS {
     }
 }
 
-#[expect(clippy::too_many_lines)]
+async fn start_stream(ws: axum::extract::ws::WebSocketUpgrade) -> Response {
+    ws.on_upgrade(dispatch::ws_task)
+}
+
 async fn get_tts(
     axum::extract::Query(query): axum::extract::Query<GetTTS>,
     headers: axum::http::HeaderMap,
 ) -> ResponseResult<Response<axum::body::Body>> {
-    let hit_any_deadline = Arc::new(AtomicBool::new(false));
-    let _guard = DeadlineMonitor::new(Duration::from_secs(5), hit_any_deadline.clone(), |took| {
-        tracing::warn!("get_tts took {} millis!", took.as_millis());
-    });
-
     let state = STATE.get().unwrap();
     if let Some(auth_key) = state.auth_key.as_deref() {
         let auth_header = headers.get("Authorization");
@@ -216,6 +215,21 @@ async fn get_tts(
             return Err(Error::Unauthorized);
         }
     }
+
+    let mode = query.mode;
+    let (audio_bytes, content_type) = get_tts_inner(state, query).await?;
+
+    Ok(mode.into_response(audio_bytes, content_type))
+}
+
+async fn get_tts_inner(
+    state: &'static State,
+    query: GetTTS,
+) -> Result<(Bytes, Option<HeaderValue>), Error> {
+    let hit_any_deadline = Arc::new(AtomicBool::new(false));
+    let _guard = DeadlineMonitor::new(Duration::from_secs(5), hit_any_deadline.clone(), |took| {
+        tracing::warn!("get_tts took {} millis!", took.as_millis());
+    });
 
     query.mode.check_speaking_rate(query.speaking_rate)?;
     query.mode.check_voice(state, &query.voice).await?;
@@ -243,7 +257,7 @@ async fn get_tts(
             query.mode.check_length(&cached_audio, query.max_length)?;
 
             tracing::debug!("Used cached TTS for {cache_key}");
-            return Ok(query.mode.into_response(cached_audio, None));
+            return Ok((cached_audio, None));
         }
 
         audio_cache.misses.fetch_add(1, Ordering::Relaxed);
@@ -318,7 +332,7 @@ async fn get_tts(
     };
 
     query.mode.check_length(&audio, query.max_length)?;
-    Ok(query.mode.into_response(audio, content_type))
+    Ok((audio, content_type))
 }
 
 #[derive(serde::Deserialize, Clone, Copy, Debug)]
@@ -506,6 +520,7 @@ async fn main() -> Result<()> {
         .route("/voices", get(get_voices))
         .route("/cache", get(get_cache_info))
         .route("/cache", post(refresh_cache))
+        .route("/stream", get(start_stream))
         .route("/translation_languages", get(get_translation_languages))
         .route(
             "/modes",

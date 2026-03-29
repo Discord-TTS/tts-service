@@ -23,6 +23,19 @@ memchr = "2.8.0"
 aformat = "0.1.8"
 mini-moka = { version = "0.10.3", features = ["sync"] }
 arc-swap = "1.8.2"
+async-trait = "0.1.89"
+tokio-tungstenite = { version = "0.28.0", default-features = false }
+
+[dependencies.songbird]
+git = "https://github.com/serenity-rs/songbird"
+branch = "serenity-next"
+features = ["driver", "gateway", "builtin-queue", "tungstenite", "rustls"]
+default-features = false
+
+[dependencies.symphonia]
+features = ["mp3", "ogg", "wav", "pcm"]
+default-features = false
+version = "0.5.3"
 
 [dependencies.tracing-subscriber]
 version = "0.3.23"
@@ -32,7 +45,7 @@ features = ["smallvec", "fmt", "ansi", "parking_lot"]
 [dependencies.axum]
 version = "0.8.8"
 default-features = false
-features = ["http1", "http2", "json", "query", "tokio"]
+features = ["http1", "http2", "json", "query", "tokio", "ws"]
 
 [dependencies.tokio]
 version = "1.50.0"
