@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 
+use small_fixed_array::FixedString;
 use songbird::input::{AudioStream, AudioStreamError, core::io::MediaSource};
 
 use crate::GetTTS;
@@ -30,7 +31,9 @@ impl songbird::input::Compose for TTSSource {
     async fn create_async(
         &mut self,
     ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        let request = self.0.take().ok_or(AudioStreamError::Unsupported)?;
+        let mut request = self.0.take().ok_or(AudioStreamError::Unsupported)?;
+        request.preferred_format = Some(FixedString::from_static_trunc("opus"));
+
         match crate::get_tts_inner(crate::STATE.get().unwrap(), request).await {
             Ok((audio, _)) => {
                 let input = Box::new(std::io::Cursor::new(audio));
