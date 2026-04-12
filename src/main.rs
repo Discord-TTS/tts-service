@@ -11,7 +11,7 @@ use std::{
     fmt::Display,
     str::FromStr,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -450,6 +450,7 @@ struct State {
     reqwest: reqwest::Client,
 
     cache: ArcSwap<AudioCache>,
+    calls: Mutex<Option<dispatch::CallMap>>,
 
     polly: polly::State,
     gtts: tokio::sync::RwLock<gtts::State>,
@@ -490,6 +491,8 @@ async fn main() -> Result<()> {
         gcloud: gcloud::State::new(client)?,
         polly: polly::State::new(&aws_config::load_from_env().await),
         gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
+
+        calls: Mutex::new(Some(dispatch::CallMap::new())),
 
         cache: {
             let max_cap = std::env::var("CACHE_MAX_CAPACITY")

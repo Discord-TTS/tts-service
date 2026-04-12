@@ -45,8 +45,16 @@ async fn recieve_message(ws: &mut axum::extract::ws::WebSocket) -> MessageRespon
     }
 }
 
+pub type CallMap = HashMap<GuildId, songbird::Call>;
+
 pub async fn ws_task(mut ws: axum::extract::ws::WebSocket) {
-    let mut calls = HashMap::<GuildId, songbird::Call>::new();
+    let state = crate::STATE.get().expect("should be set before requests");
+    let calls = state.calls.lock().unwrap().take();
+    let Some(mut calls) = calls else {
+        tracing::warn!("Attempted to start two streams at once");
+        return;
+    };
+
     loop {
         let msg = match recieve_message(&mut ws).await {
             MessageResponse::Ok(msg) => msg,
@@ -83,6 +91,8 @@ pub async fn ws_task(mut ws: axum::extract::ws::WebSocket) {
             }
         }
     }
+
+    *state.calls.lock().unwrap() = Some(calls);
 }
 
 fn ws_connect_info_to_songbird(
