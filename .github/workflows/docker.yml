@@ -23,4 +23,6 @@ jobs:
         with:
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: gnomeddev/tts-service:latest
+          tags: |
+            gnomeddev/tts-service:latest
+            gnomeddev/tts-service:${{ github.sha }}
