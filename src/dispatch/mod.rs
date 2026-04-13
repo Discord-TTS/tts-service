@@ -84,7 +84,7 @@ pub async fn ws_task(mut ws: axum::extract::ws::WebSocket) {
                     continue;
                 };
 
-                call.stop();
+                call.queue().stop();
             }
             IncomingMessage::Leave => {
                 calls.remove(&msg.guild_id);
