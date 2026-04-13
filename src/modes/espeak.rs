@@ -1,11 +1,14 @@
 use std::sync::{LazyLock, OnceLock};
 
-use aformat::{CapStr, ToArrayString, aformat};
+use aformat::{CapStr, ToArrayString, aformat, astr};
+use itertools::Itertools as _;
 use memchr::memmem::Finder;
 use reqwest::header::HeaderValue;
-use tokio::io::AsyncReadExt;
 
 use crate::Result;
+
+const ESPEAK_NG_DATA_PATH: &str = "/usr/local/share/espeak-ng-data";
+const MBROLA_DATA_PATH: &str = "/usr/share/mbrola/data";
 
 struct Finders {
     replaced_with_err: Finder<'static>,
@@ -34,14 +37,12 @@ pub async fn get_tts(
 
     // We have to loop due to random "unable to get .wav header" errors.
     let mut i = 1;
-    let mut stderr_buf = Vec::new();
     let mut raw_wav = loop {
-        let espeak_process = tokio::process::Command::new("espeak")
+        let mut espeak_process = tokio::process::Command::new("espeak-ng")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .args([
                 "--pho",
-                "-q",
                 "-s",
                 &speaking_rate.to_arraystring(),
                 "-v",
@@ -50,58 +51,51 @@ pub async fn get_tts(
             ])
             .spawn()?;
 
-        let tokio::process::Child { stdout, stderr, .. } = espeak_process;
+        let espeak_stdout: std::process::Stdio = espeak_process
+            .stdout
+            .take()
+            .expect("Failed to open espeak stdout")
+            .try_into()?;
 
-        let espeak_stdout: std::process::Stdio =
-            stdout.expect("Failed to open espeak stdout").try_into()?;
-
-        let mut mbrola_process = tokio::process::Command::new("mbrola")
+        let mbrola_process = tokio::process::Command::new("mbrola")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(espeak_stdout)
             .args([
                 "-e",
-                &aformat!("/usr/share/mbrola/{voice}/{voice}"),
+                &dbg!(aformat!("{}/{voice}/{voice}", astr!(MBROLA_DATA_PATH))),
                 "-",
                 "-.wav",
             ])
             .spawn()?;
 
-        // Filter out some warning messages from mbrola that clutter logs
-        if let Some(mut mbrola_stderr) = mbrola_process.stderr.take() {
-            tokio::spawn(async move {
-                let mut buffer = Vec::new();
-                while let Ok(written_bytes) = mbrola_stderr.read_buf(&mut buffer).await {
-                    if written_bytes == 0 {
-                        break;
-                    }
+        let (espeak_output, mbrola_output) = tokio::try_join!(
+            espeak_process.wait_with_output(),
+            mbrola_process.wait_with_output(),
+        )?;
 
-                    if replaced_with_err.find(&buffer).is_none() {
-                        tracing::error!("Mbrola Error: {}", String::from_utf8_lossy(&buffer));
-                    }
-
-                    buffer.clear();
-                }
-
-                tracing::debug!("mbrola_stderr watcher closed");
-            });
-        }
-
-        let output = mbrola_process.wait_with_output().await?;
-        if output.stdout.len() == 44 {
-            let mut espeak_stderr = stderr.expect("Unable to open espeak stderr");
-
-            stderr_buf.clear();
-            espeak_stderr.read_to_end(&mut stderr_buf).await?;
-
-            if repeat_err.find(&stderr_buf).is_some() {
-                i += 1;
-                continue;
-            }
+        if repeat_err.find(&espeak_output.stderr).is_some() {
+            i += 1;
+            continue;
         }
 
         tracing::debug!("Generated eSpeak after {i} tries");
-        break output.stdout;
+        if !espeak_output.stderr.is_empty() {
+            let stderr_string = String::from_utf8_lossy(&espeak_output.stderr);
+            tracing::error!("eSpeak Error: {stderr_string}");
+        }
+
+        if !mbrola_output.stderr.is_empty() {
+            let stderr_string = String::from_utf8_lossy(&mbrola_output.stderr);
+            let stderr_string = stderr_string
+                .lines()
+                .filter(|line| replaced_with_err.find(line.as_bytes()).is_none())
+                .join("\n");
+
+            tracing::error!("Mbrola Error: {stderr_string}");
+        }
+
+        break mbrola_output.stdout;
     };
 
     // Fix the wav header to set the ChunkSize and SubChunk2Size
@@ -133,7 +127,7 @@ pub fn get_voices() -> &'static [String] {
     VOICES.get_or_init(|| {
         (|| {
             let mut files = Vec::new();
-            for file in std::fs::read_dir("/usr/local/share/espeak-ng-data/voices/mb")? {
+            for file in std::fs::read_dir(aformat!("{}/voices/mb", astr!(ESPEAK_NG_DATA_PATH)))? {
                 let file = file?;
                 if file.file_type()?.is_file() {
                     let file_name = file.file_name().into_string().expect("Invalid filename!");
