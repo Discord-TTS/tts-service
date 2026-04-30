@@ -23,14 +23,25 @@
           patches = [
             # Fixes espeak-ng with mbrola
             (pkgsUnpatched.fetchpatch2 {
-              url = "https://github.com/NixOS/nixpkgs/pull/511135.patch";
+              url = "https://github.cofm/NixOS/nixpkgs/pull/511135.patch";
               hash = "sha256-Y/KYc9ffXQ7wdNJuA86oXY3Fp2bMlmfVw21WUji66i4=";
             })
           ];
         };
 
-        pkgs = import nixpkgs { inherit system; };
         lib = pkgs.lib;
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [
+            (final: prev: {
+              espeak-ng = prev.espeak-ng.override {
+                klattSupport = false;
+                pcaudiolibSupport = false;
+                speechPlayerSupport = false;
+              };
+            })
+          ];
+        };
 
         pkgDesc = (lib.importTOML ./Cargo.toml).package;
         pkgPath = lib.makeBinPath [
