@@ -1,4 +1,5 @@
 use aws_sdk_polly::types::{Engine, Gender, LanguageCode, OutputFormat, TextType, VoiceId};
+use azure_speech::synthesizer::ssml::ssml::{self, Serialize};
 use serde::ser::SerializeStruct;
 use small_fixed_array::FixedString;
 
@@ -67,7 +68,17 @@ pub async fn get_tts(
     preferred_format: Option<&str>,
 ) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
     let text = if let Some(speaking_rate) = speaking_rate {
-        format!("<speak><prosody rate=\"{speaking_rate}%\">{text}</prosody></speak>")
+        let rate_param = ssml::ProsodyRate::Rate(speaking_rate.into());
+        let prosody_elem =
+            ssml::Element::Prosody(ssml::Prosody::new(rate_param, [ssml::text(text)]));
+
+        let options = ssml::SerializeOptions::default().flavor(ssml::Flavor::AmazonPolly);
+
+        let mut out = String::from("<speak>");
+        prosody_elem.serialize(&mut out, &options).unwrap();
+        out.push_str("</speak>");
+
+        out
     } else {
         text.into_string()
     };

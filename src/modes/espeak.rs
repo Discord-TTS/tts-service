@@ -122,8 +122,8 @@ pub fn check_length(audio: &[u8], max_length: u32) -> bool {
         < max_length
 }
 
-pub fn get_voices() -> &'static [String] {
-    static VOICES: OnceLock<Vec<String>> = OnceLock::new();
+pub fn get_voices() -> &'static [Box<str>] {
+    static VOICES: OnceLock<Vec<Box<str>>> = OnceLock::new();
     VOICES.get_or_init(|| {
         (|| {
             let mut files = Vec::new();
@@ -136,7 +136,7 @@ pub fn get_voices() -> &'static [String] {
                     if let Some(language) = file_name_iter.next()
                         && file_name_iter.next().is_none()
                     {
-                        files.push(language.to_owned());
+                        files.push(Box::<str>::from(language));
                     }
                 }
             }
@@ -149,5 +149,5 @@ pub fn get_voices() -> &'static [String] {
 }
 
 pub fn check_voice(voice: &str) -> bool {
-    get_voices().iter().any(|s| s.as_str() == voice)
+    get_voices().iter().any(|s| &**s == voice)
 }

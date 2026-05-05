@@ -1,3 +1,4 @@
+pub mod azure;
 pub mod espeak;
 pub mod gcloud;
 pub mod gtts;

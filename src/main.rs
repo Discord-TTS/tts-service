@@ -42,6 +42,8 @@ mod translation;
 
 use modes::{espeak, gcloud, gtts, polly};
 
+use crate::modes::azure;
+
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
 type AudioCacheDigest = GenericArray<u8, U32>;
@@ -100,16 +102,18 @@ async fn get_voices(
         match mode {
             TTSMode::gTTS => to_value(gtts::get_raw_voices()),
             TTSMode::eSpeak => to_value(espeak::get_voices()),
+            TTSMode::Azure => to_value(azure::get_voices()),
             TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
             TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud).await?),
         }?
     } else {
-        to_value(match mode {
-            TTSMode::gTTS => gtts::get_voices(),
-            TTSMode::eSpeak => espeak::get_voices().to_vec(),
-            TTSMode::Polly => polly::get_voices(&state.polly).await?,
-            TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
-        })?
+        match mode {
+            TTSMode::gTTS => to_value(gtts::get_voices()),
+            TTSMode::eSpeak => to_value(espeak::get_voices()),
+            TTSMode::Azure => to_value(azure::get_voices()),
+            TTSMode::Polly => to_value(polly::get_voices(&state.polly).await?),
+            TTSMode::gCloud => to_value(gcloud::get_voices(&state.gcloud).await?),
+        }?
     }))
 }
 
@@ -315,6 +319,15 @@ async fn get_tts_inner(
             )
             .await?
         }
+        TTSMode::Azure => {
+            azure::get_tts(
+                &state.azure,
+                &text,
+                &query.voice,
+                query.speaking_rate.unwrap_or(1.0),
+            )
+            .await?
+        }
     };
 
     tracing::debug!("Generated TTS from {cache_key}");
@@ -342,6 +355,7 @@ enum TTSMode {
     Polly,
     eSpeak,
     gCloud,
+    Azure,
 }
 
 impl TTSMode {
@@ -359,6 +373,7 @@ impl TTSMode {
                         Self::eSpeak => "audio/wav",
                         Self::gCloud => "audio/opus",
                         Self::Polly => "audio/ogg",
+                        Self::Azure => unreachable!(),
                     })
                 }),
             )

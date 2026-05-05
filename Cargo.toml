@@ -25,6 +25,8 @@ mini-moka = { version = "0.10.3", features = ["sync"] }
 arc-swap = "1.8.2"
 async-trait = "0.1.89"
 tokio-tungstenite = { version = "0.28.0", default-features = false }
+azure-speech = { version = "0.10.0", default-features = false, features = ["tws-fastrand", "tws-rustls-native-roots"] }
+deadpool = { version = "0.13.0", default-features = false, features = ["managed", "rt_tokio_1"] }
 
 [dependencies.songbird]
 git = "https://github.com/serenity-rs/songbird"
