@@ -8,6 +8,7 @@
 )]
 
 use std::{
+    collections::HashMap,
     fmt::Display,
     str::FromStr,
     sync::{
@@ -18,6 +19,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use axum::{
     Json,
     http::header::HeaderValue,
@@ -45,12 +47,6 @@ use modes::{espeak, gcloud, gtts, polly};
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
 type AudioCacheDigest = GenericArray<u8, U32>;
-
-#[must_use]
-pub fn check_mp3_length(audio: &[u8], max_length: u64) -> bool {
-    use bytes::Buf;
-    mp3_duration::from_read(&mut audio.reader()).map_or(true, |d| d.as_secs() < max_length)
-}
 
 pub struct DeadlineMonitor<F: FnOnce(Duration)> {
     start: Instant,
@@ -100,15 +96,15 @@ async fn get_voices(
         match mode {
             TTSMode::gTTS => to_value(gtts::get_raw_voices()),
             TTSMode::eSpeak => to_value(espeak::get_voices()),
-            TTSMode::Polly => to_value(polly::get_raw_voices(&state.polly).await?),
-            TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud).await?),
+            TTSMode::Polly => to_value(polly::get_raw_voices(state.polly.as_ref()?).await?),
+            TTSMode::gCloud => to_value(gcloud::get_raw_voices(&state.gcloud?).await?),
         }?
     } else {
         to_value(match mode {
             TTSMode::gTTS => gtts::get_voices(),
             TTSMode::eSpeak => espeak::get_voices().to_vec(),
-            TTSMode::Polly => polly::get_voices(&state.polly).await?,
-            TTSMode::gCloud => gcloud::get_voices(&state.gcloud).await?,
+            TTSMode::Polly => polly::get_voices(&state.polly?).await?,
+            TTSMode::gCloud => gcloud::get_voices(&state.gcloud?).await?,
         })?
     }))
 }
@@ -285,7 +281,7 @@ async fn get_tts_inner(
 
     let (audio, content_type) = match query.mode {
         TTSMode::gTTS => {
-            gtts::get_tts(&state.gtts, &text, &query.voice, hit_any_deadline.clone()).await?
+            gtts::get_tts(&state.gtts?, &text, &query.voice, hit_any_deadline.clone()).await?
         }
         TTSMode::eSpeak => {
             espeak::get_tts(
@@ -297,7 +293,7 @@ async fn get_tts_inner(
         }
         TTSMode::Polly => {
             polly::get_tts(
-                &state.polly,
+                &state.polly?,
                 text,
                 &query.voice,
                 query.speaking_rate.map(|r| r as u8),
@@ -307,7 +303,7 @@ async fn get_tts_inner(
         }
         TTSMode::gCloud => {
             gcloud::get_tts(
-                &state.gcloud,
+                &state.gcloud?,
                 &text,
                 &query.voice,
                 query.speaking_rate.unwrap_or(0.0),
@@ -343,6 +339,30 @@ enum TTSMode {
     eSpeak,
     gCloud,
 }
+struct TTSVoices {
+    raw: serde_json::Value,
+    nice: Vec<String>,
+}
+#[derive(Debug, Clone, Copy)]
+struct TTSParams<'a> {
+    voice: &'a str,
+    lang: &'a str,
+    speaking_rate: f32,
+}
+
+#[async_trait]
+trait TTSEngine {
+    async fn check_params(&self, params: TTSParams<'_>) -> Option<Response>;
+    fn check_length(&self, audio: &[u8], max_length: u64) -> bool;
+    async fn speak(
+        &self,
+        text: &str,
+        params: TTSParams<'_>,
+        preferred_format: Option<&str>,
+    ) -> Result<(Bytes, Option<HeaderValue>)>;
+    async fn get_voices(&self) -> Result<TTSVoices>;
+    fn get_defaults(&self) -> TTSParams<'static>;
+}
 
 impl TTSMode {
     fn into_response(
@@ -370,7 +390,7 @@ impl TTSMode {
         if match self {
             Self::gTTS => gtts::check_voice(voice),
             Self::eSpeak => espeak::check_voice(voice),
-            Self::gCloud => gcloud::check_voice(&state.gcloud, voice).await?,
+            Self::gCloud => gcloud::check_voice(state.gcloud.as_ref()?, voice).await?,
             Self::Polly => polly::check_voice(&state.polly, voice).await?,
         } {
             Ok(())
@@ -452,9 +472,10 @@ struct State {
     cache: ArcSwap<AudioCache>,
     calls: Mutex<Option<dispatch::CallMap>>,
 
-    polly: polly::State,
-    gtts: tokio::sync::RwLock<gtts::State>,
-    gcloud: tokio::sync::RwLock<gcloud::State>,
+    engines: HashMap<String, Arc<dyn TTSEngine>>,
+    polly: Result<polly::State, Error>,
+    gtts: Result<tokio::sync::RwLock<gtts::State>, Error>,
+    gcloud: Result<tokio::sync::RwLock<gcloud::State>, Error>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -488,10 +509,12 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::new();
     let result = STATE.set(State {
         reqwest: client.clone(),
-        gcloud: gcloud::State::new(client)?,
-        polly: polly::State::new(&aws_config::load_from_env().await),
-        gtts: tokio::sync::RwLock::new(gtts::get_random_ipv6(ip_block).await?),
-
+        gcloud: gcloud::State::new(client).map_err(|e| e.into()),
+        polly: Ok(polly::State::new(&aws_config::load_from_env().await)),
+        gtts: gtts::get_random_ipv6(ip_block)
+            .await
+            .map(|v6| tokio::sync::RwLock::new(v6))
+            .map_err(|e| e.into()),
         calls: Mutex::new(Some(dispatch::CallMap::new())),
 
         cache: {
@@ -557,10 +580,9 @@ enum Error {
 
     Unknown(anyhow::Error),
 }
-
-impl<E: Into<anyhow::Error>> From<E> for Error {
-    fn from(e: E) -> Self {
-        Self::Unknown(e.into())
+impl From<anyhow::Error> for Error {
+    fn from(value: anyhow::Error) -> Self {
+        Self::Unknown(value)
     }
 }
 
@@ -578,6 +600,7 @@ impl std::fmt::Display for Error {
         }
     }
 }
+impl std::error::Error for Error {}
 
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> Response {
