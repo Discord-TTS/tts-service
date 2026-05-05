@@ -1,4 +1,5 @@
 use base64::Engine;
+use extract_map::{ExtractKey, ExtractMap};
 use tokio::sync::RwLock;
 
 use crate::Result;
@@ -64,6 +65,12 @@ pub struct GoogleVoice {
     #[serde(default)]
     pub ssmlGender: Gender,
     pub languageCodes: [String; 1],
+}
+
+impl ExtractKey<String> for GoogleVoice {
+    fn extract_key(&self) -> &String {
+        &self.name
+    }
 }
 
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
@@ -227,11 +234,12 @@ pub async fn get_tts(
     ))
 }
 
-static VOICES: tokio::sync::OnceCell<Vec<GoogleVoice>> = tokio::sync::OnceCell::const_new();
-async fn get_voices_(state: &RwLock<State>) -> Result<Vec<GoogleVoice>> {
+static VOICES: tokio::sync::OnceCell<ExtractMap<String, GoogleVoice>> =
+    tokio::sync::OnceCell::const_new();
+async fn get_voices_(state: &RwLock<State>) -> Result<ExtractMap<String, GoogleVoice>> {
     #[derive(serde::Deserialize)]
     struct VoiceResponse {
-        voices: Vec<GoogleVoice>,
+        voices: ExtractMap<String, GoogleVoice>,
     }
 
     let jwt_token = refresh_jwt(state).await?;
@@ -253,7 +261,9 @@ pub async fn check_voice(state: &RwLock<State>, voice: &str) -> Result<bool> {
     Ok(get_voices(state).await?.iter().any(|s| s.as_str() == voice))
 }
 
-pub async fn get_raw_voices(state: &RwLock<State>) -> Result<&'static Vec<GoogleVoice>> {
+pub async fn get_raw_voices(
+    state: &RwLock<State>,
+) -> Result<&'static ExtractMap<String, GoogleVoice>> {
     VOICES.get_or_try_init(|| get_voices_(state)).await
 }
 

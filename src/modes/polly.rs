@@ -1,4 +1,5 @@
 use aws_sdk_polly::types::{Engine, Gender, LanguageCode, OutputFormat, TextType, VoiceId};
+use extract_map::{ExtractKey, ExtractMap};
 use serde::ser::SerializeStruct;
 use small_fixed_array::FixedString;
 
@@ -14,6 +15,12 @@ pub struct VoiceLocal {
     pub gender: Option<Gender>,
     pub name: Option<String>,
     pub id: Option<VoiceId>,
+}
+
+impl ExtractKey<Option<VoiceId>> for VoiceLocal {
+    fn extract_key(&self) -> &Option<VoiceId> {
+        &self.id
+    }
 }
 
 impl From<aws_sdk_polly::types::Voice> for VoiceLocal {
@@ -103,9 +110,10 @@ pub async fn get_tts(
     ))
 }
 
-static VOICES: tokio::sync::OnceCell<Vec<VoiceLocal>> = tokio::sync::OnceCell::const_new();
-async fn get_voices_(state: &State) -> Result<Vec<VoiceLocal>> {
-    let mut voices = Vec::new();
+static VOICES: tokio::sync::OnceCell<ExtractMap<Option<VoiceId>, VoiceLocal>> =
+    tokio::sync::OnceCell::const_new();
+async fn get_voices_(state: &State) -> Result<ExtractMap<Option<VoiceId>, VoiceLocal>> {
+    let mut voices = ExtractMap::new();
     let mut next_token = None;
 
     loop {
@@ -151,6 +159,8 @@ pub async fn get_voices(state: &State) -> Result<Vec<String>> {
         })
 }
 
-pub async fn get_raw_voices(state: &State) -> Result<&'static Vec<VoiceLocal>> {
+pub async fn get_raw_voices(
+    state: &State,
+) -> Result<&'static ExtractMap<Option<VoiceId>, VoiceLocal>> {
     VOICES.get_or_try_init(|| get_voices_(state)).await
 }

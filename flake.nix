@@ -92,6 +92,7 @@
       tts-utils.mkTTSModule {
         inherit pkgs;
         package = ttsServicePkg;
+        extraDevTools = [ pkgs.rust-analyzer ];
         extraDockerContents = [ pkgs.dockerTools.caCertificates ];
       }
     );
