@@ -1,21 +1,167 @@
 use std::{
+    fmt::Display,
     sync::{Arc, OnceLock, atomic::AtomicBool},
     time::Duration,
 };
 
 use aformat::ToArrayString;
+use async_trait::async_trait;
+use axum::{
+    http::HeaderValue,
+    response::{IntoResponse, Response},
+};
+use bytes::Bytes;
 use ipgen::IpNetwork;
 use itertools::Itertools;
 use rand::RngExt as _;
+use serde_json::to_value;
 use tokio::sync::RwLock;
 
-use crate::{DeadlineMonitor, Result};
+use crate::{DeadlineMonitor, Result, TTSEngine, TTSParams, TTSVoices};
 
 #[derive(Clone)]
 pub struct State {
-    ip: std::net::IpAddr,
+    ip_client: Arc<RwLock<IpClient>>,
     ip_block: Option<IpNetwork>,
-    pub http: reqwest::Client,
+    hit_any_deadline: Arc<AtomicBool>,
+}
+
+struct IpClient {
+    client: reqwest::Client,
+    ip: std::net::IpAddr,
+}
+impl IpClient {
+    fn new_ip(&mut self, ip: std::net::IpAddr) -> Result<()> {
+        self.client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .local_address(Some(ip))
+            .build()?;
+        self.ip = ip;
+        Ok(())
+    }
+    async fn get(&self, text: &str, lang: &str) -> Result<CheckResult> {
+        let mut url = get_base_url();
+        url.query_pairs_mut()
+            .append_pair("tl", lang)
+            .append_pair("q", text)
+            .append_pair("textlen", &text.len().to_arraystring())
+            .finish();
+        is_block(self.client.get(url).send().await).await
+    }
+
+    pub async fn get_random_ipv6(&mut self, ip_block: Option<IpNetwork>) -> Result<()> {
+        let Some(ip_block) = ip_block else {
+            self.new_ip("0.0.0.0".parse()?)?;
+            return Ok(());
+        };
+
+        let mut attempts = 1;
+        loop {
+            let name: String = rand::rng()
+                .sample_iter::<char, _>(rand::distr::StandardUniform)
+                .take(16)
+                .collect();
+
+            tracing::debug!("Generated random name: {:?}", name.as_bytes());
+            let ip = ipgen::ip(&name, ip_block).unwrap();
+
+            self.new_ip(ip);
+
+            let check_result = self.get("Hello", "en").await?;
+            if let CheckResult::Ok(..) = check_result {
+                tracing::warn!("Generated random IP: {ip}");
+                break;
+            }
+            tracing::warn!(
+                "Failed to generate a new IP on attempt {attempts} with a {check_result}"
+            );
+
+            attempts += 1;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl TTSEngine for State {
+    async fn check_params(&self, params: TTSParams<'_>) -> Option<Response> {
+        if params.speaking_rate < 0. {
+            Some("Speaking rate cannot be negative".into_response())
+        } else if !self
+            .get_voices()
+            .await
+            .ok()?
+            .nice
+            .iter()
+            .any(|s| s.as_str() == params.voice)
+        {
+            Some(format!("Voice {} is not known", params.voice).into_response())
+        } else {
+            None
+        }
+    }
+    fn check_length(&self, audio: &[u8], max_length: u64) -> bool {
+        use bytes::Buf;
+        mp3_duration::from_read(&mut audio.reader()).map_or(true, |d| d.as_secs() < max_length)
+    }
+    async fn speak(
+        &self,
+        text: &str,
+        params: TTSParams<'_>,
+        preferred_format: Option<&str>,
+    ) -> Result<(Bytes, Option<HeaderValue>)> {
+        let _guard = DeadlineMonitor::new(
+            Duration::from_secs(3),
+            self.hit_any_deadline.clone(),
+            |took| {
+                tracing::warn!("Fetching gTTS audio took {} millis!", took.as_millis());
+            },
+        );
+
+        let mut content_type = None;
+        let mut audio = Vec::new();
+
+        let mut client = self.ip_client.read().await;
+        let chunks: Vec<String> = text
+            .chars()
+            .chunks(200)
+            .into_iter()
+            .map(Iterator::collect)
+            .collect();
+        for chunk in chunks {
+            loop {
+                let result = client.get(&chunk, params.voice).await?;
+
+                if let CheckResult::Ok(content_type_, audio_chunk) = result {
+                    if let Some(content_type_) = content_type_ {
+                        content_type = Some(content_type_);
+                    }
+
+                    break audio.extend(audio_chunk);
+                }
+                {
+                    drop(client);
+                    let mut rw_client = self.ip_client.write().await;
+                    tracing::warn!("IP {} has been blocked!", rw_client.ip);
+                    rw_client.get_random_ipv6(self.ip_block).await?;
+                    client = self.ip_client.read().await;
+                }
+            }
+        }
+
+        Ok((bytes::Bytes::from(audio), content_type))
+    }
+    async fn get_voices(&self) -> Result<TTSVoices> {
+        let raw: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(include_str!("data/voices-gtts.json"))?;
+        Ok(TTSVoices {
+            raw: to_value(raw.clone())?,
+            nice: raw.into_keys().collect(),
+        })
+    }
+    fn get_defaults(&self) -> TTSParams<'static> {
+        todo!()
+    }
 }
 
 fn get_base_url() -> reqwest::Url {
@@ -30,65 +176,31 @@ fn get_base_url() -> reqwest::Url {
         .clone()
 }
 
-fn parse_url(text: &str, lang: &str) -> reqwest::Url {
-    let mut url = get_base_url();
-    url.query_pairs_mut()
-        .append_pair("tl", lang)
-        .append_pair("q", text)
-        .append_pair("textlen", &text.len().to_arraystring())
-        .finish();
-    url
-}
-
-pub async fn get_random_ipv6(ip_block: Option<IpNetwork>) -> Result<State> {
-    let Some(ip_block) = ip_block else {
-        return Ok(State {
-            ip_block: None,
-            ip: "0.0.0.0".parse()?,
-            http: reqwest::Client::new(),
-        });
-    };
-
-    let mut attempts = 1;
-    loop {
-        let name: String = rand::rng()
-            .sample_iter::<char, _>(rand::distr::StandardUniform)
-            .take(16)
-            .collect();
-
-        tracing::debug!("Generated random name: {:?}", name.as_bytes());
-        let ip = ipgen::ip(&name, ip_block).unwrap();
-
-        let http = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .local_address(Some(ip))
-            .build()?;
-
-        let check_request = http.get(parse_url("Hello", "en")).send().await;
-        let fail_reason = match is_block(check_request).await? {
-            CheckResult::Ok(..) => {
-                tracing::warn!("Generated random IP: {ip}");
-                break Ok(State {
-                    ip,
-                    http,
-                    ip_block: Some(ip_block),
-                });
-            }
-            CheckResult::NormalBlock => "429 block",
-            CheckResult::TimeoutBlock => "timeout block",
-            CheckResult::HostUnreachable => "unreachable error",
-        };
-
-        tracing::warn!("Failed to generate a new IP on attempt {attempts} with a {fail_reason}");
-        attempts += 1;
-    }
-}
-
 enum CheckResult {
     Ok(Option<reqwest::header::HeaderValue>, bytes::Bytes),
     NormalBlock,
     TimeoutBlock,
     HostUnreachable,
+}
+impl Display for CheckResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckResult::NormalBlock => write!(f, "429 block"),
+            CheckResult::TimeoutBlock => write!(f, "timeout block"),
+            CheckResult::HostUnreachable => write!(f, "unreachable error"),
+            CheckResult::Ok(Some(header_value), bytes) => {
+                write!(
+                    f,
+                    "{} bytes of {}",
+                    bytes.len(),
+                    header_value.to_str().unwrap_or("unknown")
+                )
+            }
+            CheckResult::Ok(None, bytes) => {
+                write!(f, "{} bytes of unknown", bytes.len())
+            }
+        }
+    }
 }
 
 fn is_host_unreachable(err: &reqwest::Error) -> bool {
@@ -120,62 +232,4 @@ async fn is_block(resp: reqwest::Result<reqwest::Response>) -> Result<CheckResul
             }
         }
     }
-}
-
-pub async fn get_tts(
-    state: &RwLock<State>,
-    text: &str,
-    voice: &str,
-    hit_any_deadline: Arc<AtomicBool>,
-) -> Result<(bytes::Bytes, Option<reqwest::header::HeaderValue>)> {
-    let _guard = DeadlineMonitor::new(Duration::from_secs(3), hit_any_deadline, |took| {
-        tracing::warn!("Fetching gTTS audio took {} millis!", took.as_millis());
-    });
-
-    let mut content_type = None;
-    let mut audio = Vec::new();
-
-    let chunks: Vec<String> = text
-        .chars()
-        .chunks(200)
-        .into_iter()
-        .map(Iterator::collect)
-        .collect();
-    for chunk in chunks {
-        loop {
-            let (ip, result) = {
-                let State { ip, http, .. } = state.read().await.clone();
-                (ip, http.get(parse_url(&chunk, voice)).send().await)
-            };
-
-            if let CheckResult::Ok(content_type_, audio_chunk) = is_block(result).await? {
-                if let Some(content_type_) = content_type_ {
-                    content_type = Some(content_type_);
-                }
-
-                break audio.extend(audio_chunk);
-            }
-
-            // Generate a new client, with an new IP, and try again
-            let mut state = state.write().await;
-            if state.ip == ip {
-                tracing::warn!("IP {ip} has been blocked!");
-                *state = get_random_ipv6(state.ip_block).await?;
-            }
-        }
-    }
-
-    Ok((bytes::Bytes::from(audio), content_type))
-}
-
-pub fn check_voice(voice: &str) -> bool {
-    get_voices().iter().any(|s| s.as_str() == voice)
-}
-
-pub fn get_voices() -> Vec<String> {
-    get_raw_voices().into_keys().collect()
-}
-
-pub fn get_raw_voices() -> std::collections::BTreeMap<String, String> {
-    serde_json::from_str(include_str!("data/voices-gtts.json")).unwrap()
 }
