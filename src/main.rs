@@ -30,7 +30,7 @@ use reqwest::StatusCode;
 use serde_json::to_value;
 use sha2::{
     Digest,
-    digest::{consts::U32, generic_array::GenericArray},
+    digest::{array::Array, consts::U32},
 };
 use small_fixed_array::{FixedString, ValidLength};
 use tracing::level_filters::LevelFilter;
@@ -44,7 +44,7 @@ use modes::{espeak, gcloud, gtts, polly};
 
 type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 type ResponseResult<T> = std::result::Result<T, Error>;
-type AudioCacheDigest = GenericArray<u8, U32>;
+type AudioCacheDigest = Array<u8, U32>;
 
 #[must_use]
 pub fn check_mp3_length(audio: &[u8], max_length: u64) -> bool {
