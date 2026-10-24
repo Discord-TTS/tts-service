@@ -127,7 +127,7 @@ pub fn get_voices() -> &'static [String] {
     VOICES.get_or_init(|| {
         (|| {
             let mut files = Vec::new();
-            for file in std::fs::read_dir(aformat!("{}/voices/mb", astr!(ESPEAK_NG_DATA_PATH)))? {
+            for file in std::fs::read_dir(&*aformat!("{}/voices/mb", astr!(ESPEAK_NG_DATA_PATH)))? {
                 let file = file?;
                 if file.file_type()?.is_file() {
                     let file_name = file.file_name().into_string().expect("Invalid filename!");
