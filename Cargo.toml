@@ -28,8 +28,8 @@ tokio-tungstenite = { version = "0.30.0", default-features = false }
 nonmax = { version = "0.5.5", features = ["serde"] }
 
 [dependencies.songbird]
-git = "https://github.com/Gnomeddev/songbird"
-branch = "next-bump-deps"
+git = "https://github.com/serenity-rs/songbird"
+branch = "serenity-next"
 features = ["driver", "gateway", "builtin-queue", "tungstenite", "rustls"]
 default-features = false
 
