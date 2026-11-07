@@ -44,15 +44,21 @@
           cargoLock = {
             lockFile = ./Cargo.lock;
             outputHashes = {
-              "serenity-0.12.5" = "sha256-7MuZU8e7cCPnv9WgS5HWU93tT1HOBvlLOI1H2ypmu+o=";
+              "serenity-0.12.5" = "sha256-Hmjaa1zVQirKjI+AtfbiP79Hm+NP2jftPabF0+tpdHI=";
               "songbird-0.6.1" = "sha256-hOfSZ3OT9jB40rVvRcgl0OdLD3k0fOrpUxhWo4aSc3c=";
             };
           };
 
+          buildInputs = with pkgs; [
+            aws-lc
+            zstd
+            opus
+          ];
           nativeBuildInputs = with pkgs; [
             makeWrapper
-            cmake
+            pkg-config
           ];
+
           patchPhase = ''
             substituteInPlace src/modes/espeak.rs \
               --replace-fail /usr/share/mbrola ${pkgs.mbrola-voices} \
