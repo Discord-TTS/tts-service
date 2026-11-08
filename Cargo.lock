@@ -4213,8 +4213,7 @@ dependencies = [
 [[package]]
 name = "serenity-voice-model"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "910c6511e59df6fa362921e4900cdbd3192210231a2ba135594c480871422af6"
+source = "git+https://github.com/serenity-rs/voice-model?branch=fucking-discord-sucks-massive-balls#38681777dc4199a47796c4c14fe16a2c10dcc08a"
 dependencies = [
  "bitflags 2.13.2",
  "num-traits",
@@ -4391,7 +4390,7 @@ dependencies = [
 [[package]]
 name = "songbird"
 version = "0.6.1"
-source = "git+https://github.com/serenity-rs/songbird?branch=serenity-next#6391c84eb3555ef2ee4456fac91ed2079ef1ac19"
+source = "git+https://github.com/GnomedDev/songbird?branch=implement-media-sink-wants#8c3c2f8dd065a4026e7a6a7b9d53411cc88ca015"
 dependencies = [
  "aead 0.6.1",
  "aes-gcm 0.11.1",
